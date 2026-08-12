@@ -6,128 +6,73 @@
 //
 
 import SwiftUI
-import AVKit
-import PerceptionCore
 
+/// The home tab. It shows one timeline, and it opens the compose screen.
 struct TimelineView: View {
-    @State var type = MastoAPI.TimelineType.home
-    @State var posts: [MastoAPI.Status] = []
-    @Environment(MastoAPI.self) private var api: MastoAPI
-    @State private var isLoadingMore = false
-    @State private var showComposeSheet: Bool = false
+    @Environment(MastoAPI.self) private var api
+
+    /// The app keeps this selection for the next start. A start on a different
+    /// timeline is an unwanted result for the user.
+    @AppStorage("selectedTimeline") private var timeline: Mastodon.Timeline = .home
+
+    @State private var model: PagedListModel<Mastodon.Status>?
+    @State private var isComposing = false
 
     var body: some View {
-        WithPerceptionTracking {
-            ScrollView {
-                InfiniteScrollingPostsView(posts: $posts, isLoadingMore: $isLoadingMore, onLastItemAppeared: loadMorePosts)
+        Group {
+            if let model {
+                PostList(model: model)
+            } else {
+                ProgressView()
             }
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Menu {
-                        Button("Home", systemImage: type == .home ? "checkmark" : "house") { type = .home }
-                        Button("Local", systemImage: type == .local ? "checkmark" : "server.rack") { type = .local }
-                        Button("Federated", systemImage: type == .federated ? "checkmark" : "network") { type = .federated }
-                    } label: {
-                        HStack(spacing: 4) {
-                            Text(type.description)
-                                .font(.title.weight(.semibold))
-                            Image(systemName: "chevron.down")
-                                .foregroundColor(.secondary)
-                                .font(.headline)
+        }
+        .navigationTitle(timeline.description)
+        .toolbarTitleDisplayMode(.inlineLarge)
+        .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                Menu {
+                    Picker("Timeline", selection: $timeline) {
+                        ForEach(Mastodon.Timeline.validCases(api)) { option in
+                            Label(option.description, systemImage: option.icon).tag(option)
                         }
-                        .padding(.leading, 4)
-                        .padding(.trailing, 2)
-                        .padding(.vertical, 6)
                     }
-                    .buttonStyle(.plain)
-                    
-                }
-                
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button(action: {
-                        showComposeSheet = true
-                    }) {
-                        Image(systemName: "square.and.pencil")
-                            .padding(5)
-                            .offset(y:-2)
-                    }
-                    .glassProminentButton()
-                    .tint(.accent)
-                    .frame(width: AvatarUIScale.regular.rawValue, height: AvatarUIScale.regular.rawValue)
-                }
-                
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    AccountMenu()
-                        .frame(width: AvatarUIScale.regular.rawValue, height:  AvatarUIScale.regular.rawValue)
+                } label: {
+                    Label("Timeline", systemImage: timeline.icon)
                 }
             }
-            
-            .task(priority: .userInitiated) {
-                await loadInitialPosts()
-            }
-            .refreshable {
-                await refreshPosts()
-            }
-            .onChange(of: type) {_ in
-                Task {
-                    await refreshPosts()
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("New Post", systemImage: "square.and.pencil") {
+                    isComposing = true
                 }
             }
-            .sheet(isPresented: $showComposeSheet) {
-                ComposeView()
+            ToolbarItem(placement: .topBarTrailing) {
+                AccountMenu()
             }
+        }
+        .sheet(isPresented: $isComposing) {
+            ComposeView { created in
+                model?.prepend(created)
+            }
+        }
+        .task {
+            if model == nil {
+                model = PagedListModel(source: source(for: timeline))
+            }
+        }
+        .onChange(of: timeline) { _, newValue in
+            model?.replaceSource(source(for: newValue))
         }
     }
 
-    func loadInitialPosts() async {
-        do {
-            isLoadingMore = true
-            let fetchedPosts = try await api.timeline(type: type, after: nil)
-            posts = fetchedPosts
-            isLoadingMore = false
-        } catch {
-            await UIApplication.shared.alertError(error)
-            isLoadingMore = false
-        }
-    }
-
-    func loadMorePosts() async {
-        guard !isLoadingMore, let currentLastPostId = posts.last?.id else { return }
-        
-        await MainActor.run {
-            self.isLoadingMore = true
-        }
-
-        do {
-            let newPosts = try await api.timeline(type: type, after: currentLastPostId)
-            if !newPosts.isEmpty {
-                posts.append(contentsOf: newPosts)
-            }
-        } catch {
-            await UIApplication.shared.alertError(error)
-        }
-        
-        await MainActor.run {
-            self.isLoadingMore = false
-        }
-    }
-
-    func refreshPosts() async {
-        do {
-            await MainActor.run {
-                 self.isLoadingMore = true
-            }
-            let refreshedPosts = try await api.timeline(type: type, after: nil)
-            posts = refreshedPosts
-        } catch {
-            await UIApplication.shared.alertError(error)
-        }
-        await MainActor.run {
-            self.isLoadingMore = false
+    private func source(for timeline: Mastodon.Timeline) -> PagedListModel<Mastodon.Status>.Source {
+        let api = api
+        return { olderThan in
+            try await api.statuses(in: timeline, olderThan: olderThan)
         }
     }
 }
 
 #Preview {
     TimelineView()
+        .previewEnvironment()
 }

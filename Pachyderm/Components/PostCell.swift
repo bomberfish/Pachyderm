@@ -6,243 +6,380 @@
 //
 
 import SwiftUI
-import AVKit
-import PerceptionCore
 
 struct PostCell: View {
-    @Binding var post: MastoAPI.Status
-    let rebloggedAuthor: MastoAPI.Account?
-    @Environment(MastoAPI.self) private var api: MastoAPI
-    
-    @State private var showFullContent = false
-    
-    init(post: Binding<MastoAPI.Status>) {
-        if post.wrappedValue.reblog != nil {
-            self._post = .init(get: {
-                post.wrappedValue.reblog ?? post.wrappedValue
-            }, set: {
-                let updatedPost = post.wrappedValue
-                updatedPost.reblog = $0
-                post.wrappedValue = updatedPost
-            })
-            self.rebloggedAuthor = post.wrappedValue.account
-        } else {
-            self._post = post
-            self.rebloggedAuthor = nil
+    @Binding var status: Mastodon.Status
+
+    /// The detail screen shows the full post. A touch on the post opens no new
+    /// screen.
+    var isDetail = false
+    /// A notification row shows a small copy of the post. That copy accepts no
+    /// touch.
+    var showsActions = true
+
+    @Environment(MastoAPI.self) private var api
+    @Environment(ErrorPresenter.self) private var errors
+    @Environment(Navigator.self) private var navigator
+
+    @State private var isRevealed = false
+    @State private var isComposingReply = false
+
+    /// The status with the content on the screen. For a boost it is the
+    /// original post.
+    private var post: Mastodon.Status { status.displayed }
+
+    private var isContentHidden: Bool {
+        post.hasContentWarning && !isRevealed && !isDetail
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let booster = status.boostedBy {
+                boostBanner(booster)
+            }
+
+            header
+
+            if post.hasContentWarning {
+                contentWarning
+            }
+
+            if !isContentHidden {
+                RichText(html: post.html, emoji: post.emojis)
+                    .font(isDetail ? .title3 : .body)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                if !post.attachments.isEmpty {
+                    AttachmentGrid(
+                        attachments: post.attachments,
+                        isSensitive: post.sensitive == true
+                    )
+                }
+            }
+
+            if showsActions {
+                PostActions(
+                    post: post,
+                    isDetail: isDetail,
+                    onOpen: { navigator.open(post) },
+                    onReply: { isComposingReply = true },
+                    onFavourite: toggleFavourite,
+                    onBoost: toggleBoost,
+                    onBookmark: toggleBookmark
+                )
+            }
+        }
+        .padding(.vertical, 6)
+        // The row uses a touch gesture. It is not in a `NavigationLink` view.
+        // The system gives a touch to the innermost view first. Thus the links
+        // in the text of the post and the buttons below it operate correctly.
+        .contentShape(.rect)
+        .onTapGesture {
+            guard !isDetail, showsActions else { return }
+            navigator.open(post)
+        }
+        .accessibilityElement(children: .contain)
+        .sheet(isPresented: $isComposingReply) {
+            ComposeView(inReplyTo: post) { _ in
+                var updated = post
+                updated.repliesCount += 1
+                withAnimation(.snappy) { write(updated) }
+            }
         }
     }
-    
-    var body: some View {
-        WithPerceptionTracking {
-            VStack(alignment: .leading, spacing: 8) {
-                if let rebloggedAuthor = rebloggedAuthor {
-                    //                ZStack {
-                    NavigationLink(destination: AccountView(initialAccount: rebloggedAuthor)) {
-                        //                        EmptyView()
-                        //                    }
-                        //                    .opacity(0)
-                        //                    .frame(width: 0, height: 0)
-                        Label("\(rebloggedAuthor.displayName ?? rebloggedAuthor.acct) boosted", systemImage: "arrow.2.squarepath")
+
+    // MARK: - Pieces
+
+    private func boostBanner(_ booster: Mastodon.Account) -> some View {
+        Button {
+            navigator.open(booster)
+        } label: {
+            Label {
+                Text("\(booster.bestDisplayName) boosted")
+            } icon: {
+                Image(systemName: "arrow.2.squarepath")
+            }
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var header: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Button {
+                navigator.open(post.account)
+            } label: {
+                HStack(spacing: 8) {
+                    AvatarView(account: post.account, size: .regular)
+
+                    VStack(alignment: .leading, spacing: 1) {
+                        RichText(
+                            html: post.account.bestDisplayName,
+                            emoji: post.account.emojis
+                        )
+                        .font(.headline)
+                        .lineLimit(1)
+
+                        Text(verbatim: "@\(post.account.acct)")
                             .font(.subheadline)
-                            .foregroundColor(.secondary)
-                        
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
                     }
                 }
-                
-                PostHeader(account: post.account, reblogger: rebloggedAuthor)
-                
-                if post.sensitive {
-                    if let cw = post.spoilerText {
-                        HStack(spacing: 4) {
-                            Image(systemName: "eye.slash")
-                            Text(cw)
-                        }
-                        .foregroundStyle(.primary)
-                        .font(.headline)
-                    }
-                    
-                    Button(action: {
-                        withAnimation(.bouncy) {
-                            showFullContent.toggle()
-                        }
-                    }) {
-                        Group {
-                            if #available(iOS 17.0, *) {
-                                Label("Show Content", systemImage: showFullContent ? "chevron.up" : "chevron.down")
-                                    .contentTransition(.symbolEffect(.automatic))
-                            } else {
-                                Label("Show Content", systemImage: showFullContent ? "chevron.up" : "chevron.down")
-                            }
-                        }
-                        .frame(maxWidth: .infinity)
-                        .foregroundStyle(.primary)
-                    }
-                    .glassButton()
-                    .controlSize(.large)
-                }
-                
-                if showFullContent || !post.sensitive {
-                    //                NavigationLink(destination: PostDetailView(post: $post)) {
-                    RichContentView(content: post.content, emojis: post.emojis)
-                    //                }
-                    if let mediaAttachments = post.mediaAttachments, !mediaAttachments.isEmpty {
-                        if mediaAttachments.count == 1 {
-                            Attachment(attachment: mediaAttachments[0])
-                                .padding(.vertical, 4)
-                        } else {
-                            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 2), spacing: 8) {
-                                ForEach(mediaAttachments) { attachment in
-                                    Attachment(attachment: attachment)
-                                        .padding(.vertical, 4)
-                                }
-                            }
-                        }
-                    }
-                }
-                HStack(spacing: 18) {
-                    HStack(spacing: 2) {
-                        Image(systemName: "arrowshape.turn.up.left")
-                        if post.repliesCount > 0 {
-                            Text("\(post.repliesCount)")
-                        }
-                    }
-                    Button(action: {
-                        Haptic.shared.play(.light)
-                        Task {
-                            do {
-                                post = try await api.favourite(post)
-                            } catch {
-                                await UIApplication.shared.alertError(error)
-                            }
-                        }
-                    }) {
-                        HStack(spacing: 2) {
-                            if #available(iOS 17.0, *) {
-                                Image(systemName: post.favourited == true ? "heart.fill" : "heart")
-                                    .symbolEffect(.bounce, value: post.favourited)
-                            } else {
-                                Image(systemName: post.favourited == true ? "heart.fill" : "heart")
-                            }
-                            if post.favouritesCount > 0 {
-                                Text("\(post.favouritesCount)")
-                                    .contentTransition(.numericText())
-                            }
-                        }
-                        .foregroundColor(post.favourited == true ? .red : .secondary)
-                    }
-                    Button(action: {
-                        Haptic.shared.play(.light)
-                        Task {
-                            do {
-                                post = try await api.reblog(post)
-                            } catch {
-                                await UIApplication.shared.alertError(error)
-                            }
-                        }
-                    }) {
-                        HStack(spacing: 2) {
-                            if #available(iOS 19.0, *) {
-                                Image(systemName: "arrow.2.squarepath")
-                                    .symbolEffect(.rotate, value: post.reblogged)
-                            } else {
-                                Image(systemName: "arrow.2.squarepath")
-                            }
-                            if post.reblogsCount > 0 {
-                                Text("\(post.reblogsCount)")
-                                    .contentTransition(.numericText())
-                            }
-                        }
-                        .foregroundColor(post.reblogged == true ? .green : .secondary)
-                        .animation(.default, value: post.reblogged)
-                        
-                    }
-                    Spacer()
-                    Group {
-                        ShareLink(item: .init(post.url ?? post.uri)) {
-                            Image(systemName: "square.and.arrow.up")
-                        }
-                        Menu(content: {Text("todo")}, label: {Image(systemName: "ellipsis")})
-                    }
-                    .onTapGesture {
-                        Haptic.shared.play(.light)
-                    }
-                }
-                .foregroundStyle(.secondary)
-                .padding(.top, 4)
-                .buttonStyle(.plain)
             }
-            .padding(.horizontal, 3)
-            .padding(.vertical, 4)
-            .id(post.id)
+            .buttonStyle(.plain)
+
+            Spacer(minLength: 4)
+
+            VStack(alignment: .trailing, spacing: 2) {
+                if let createdAt = post.createdAt {
+                    Text(createdAt, format: .relative(presentation: .numeric, unitsStyle: .narrow))
+                }
+                HStack(spacing: 3) {
+                    if post.localOnly == true {
+                        Image(systemName: "house.slash")
+                            .accessibilityLabel("Local only")
+                    }
+                    if let visibility = post.visibility, visibility != .public {
+                        Image(systemName: visibility.icon)
+                            .accessibilityLabel(visibility.description)
+                    }
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
         }
     }
-}
-    
-struct Attachment: View {
-    let attachment: MastoAPI.MediaAttachment
-    var body: some View {
-        Group {
-            switch attachment.type {
-            case "image":
-                AsyncImage(url: URL(string: attachment.previewUrl ?? attachment.url)) { image in
-                    image
-                        .resizable()
-                        .aspectRatio(contentMode: .fit)
-                        .accessibilityLabel(attachment.description ?? "Image Attachment")
-                } placeholder: {
-                    ZStack {
-                        Rectangle()
-                            .fill(.ultraThinMaterial)
-                        ProgressView()
-                    }
+
+    private var contentWarning: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label(post.spoilerText ?? "Sensitive content", systemImage: "eye.slash")
+                .font(.headline)
+
+            if !isDetail {
+                Button {
+                    withAnimation(.snappy) { isRevealed.toggle() }
+                } label: {
+                    Label(
+                        isRevealed ? "Hide content" : "Show content",
+                        systemImage: isRevealed ? "chevron.up" : "chevron.down"
+                    )
+                    .contentTransition(.symbolEffect(.replace))
+                    .frame(maxWidth: .infinity)
                 }
-            case "video":
-                VideoPlayer(player: AVPlayer(url: URL(string: attachment.url) ?? URL(fileURLWithPath: "")))
-                    .aspectRatio(contentMode: .fit)
-                    .frame(height: 200)
-                    .accessibilityLabel(attachment.description ?? "Video Attachment")
-            default:
-                Link(destination: URL(string: attachment.url) ?? URL(fileURLWithPath: "")) {
-                    Label(URL(string: attachment.url)?.lastPathComponent ?? "Attachment", systemImage: "link")
-                }
-                
+                .buttonStyle(.glassBackport)
             }
         }
-        
-        .cornerRadius(14)
+    }
+
+    // MARK: - Interactions
+
+    /// Puts a new status into the binding. For a boost it puts the status into
+    /// the inner post.
+    private func write(_ updated: Mastodon.Status) {
+        if status.reblog != nil {
+            status.reblog = Indirect(updated)
+        } else {
+            status = updated
+        }
+    }
+
+    /// Makes the change on the screen immediately. Then the app replaces the
+    /// status with the copy from the server. After an unsuccessful request the
+    /// app puts the original status back.
+    private func interact(
+        optimistically change: (inout Mastodon.Status) -> Void,
+        request: @escaping (Mastodon.Status) async throws -> Mastodon.Status,
+        failureTitle: String
+    ) {
+        let original = post
+        Haptic.shared.play(.light)
+
+        var optimistic = original
+        change(&optimistic)
+        withAnimation(.snappy) { write(optimistic) }
+
+        Task {
+            do {
+                write(try await request(original))
+            } catch {
+                write(original)
+                errors.present(error, title: failureTitle)
+            }
+        }
+    }
+
+    private func toggleFavourite() {
+        let target = !(post.favourited ?? false)
+        let api = api
+        interact(
+            optimistically: { post in
+                post.favourited = target
+                post.favouritesCount = max(0, post.favouritesCount + (target ? 1 : -1))
+            },
+            request: { post in try await api.setFavourited(target, on: post) },
+            failureTitle: target ? "Couldn't favourite" : "Couldn't unfavourite"
+        )
+    }
+
+    private func toggleBoost() {
+        let target = !(post.reblogged ?? false)
+        let api = api
+        interact(
+            optimistically: { post in
+                post.reblogged = target
+                post.reblogsCount = max(0, post.reblogsCount + (target ? 1 : -1))
+            },
+            request: { post in try await api.setReblogged(target, on: post) },
+            failureTitle: target ? "Couldn't boost" : "Couldn't unboost"
+        )
+    }
+
+    private func toggleBookmark() {
+        let target = !(post.bookmarked ?? false)
+        let api = api
+        interact(
+            optimistically: { post in post.bookmarked = target },
+            request: { post in try await api.setBookmarked(target, on: post) },
+            failureTitle: target ? "Couldn't bookmark" : "Couldn't remove bookmark"
+        )
     }
 }
 
+// MARK: - Action bar
 
+/// The buttons for reply, favourite, boost, bookmark and share. The row also
+/// has a menu with the other commands.
+private struct PostActions: View {
+    let post: Mastodon.Status
+    let isDetail: Bool
+    let onOpen: () -> Void
+    let onReply: () -> Void
+    let onFavourite: () -> Void
+    let onBoost: () -> Void
+    let onBookmark: () -> Void
 
-struct PostHeader: View {
-    public let account: MastoAPI.Account
-    public let reblogger: MastoAPI.Account?
+    /// The height of every button in the row. It gives each command a touch
+    /// area that a finger can reach without care.
+    private let hitHeight: CGFloat = 36
+
+    /// A boost has no result for a post that only its receivers can read.
+    private var canBoost: Bool {
+        post.visibility != .private && post.visibility != .direct
+    }
+
     var body: some View {
-        NavigationLink(destination: AccountView(initialAccount: account)) {
-            HStack {
-                ZStack {
-                    //               NavigationLink(destination: AccountView(initialAccount: account)) {
-                    //                   EmptyView()
-                    //                }
-                    //               .opacity(0)
-                    //               .frame(width: 0, height: 0)
-                    AvatarView(account: account, size: .small)
-                    if let reblogger = reblogger {
-                        AvatarView(account: reblogger, size: .xs)
-                            .shadow(color: .black.opacity(0.3), radius: 4, x: -1, y: -1)
-                            .offset(x: 12, y: 12)
+        HStack(spacing: 12) {
+            Button(action: onReply) {
+                count(icon: "arrowshape.turn.up.left", value: post.repliesCount)
+            }
+            .accessibilityLabel("Reply")
+
+            Button(action: onFavourite) {
+                count(
+                    icon: post.favourited == true ? "star.fill" : "star",
+                    value: post.favouritesCount,
+                    tint: post.favourited == true ? .yellow : nil
+                )
+            }
+            .accessibilityLabel(post.favourited == true ? "Unfavourite" : "Favourite")
+
+            Button(action: onBoost) {
+                count(
+                    icon: "arrow.2.squarepath",
+                    value: post.reblogsCount,
+                    tint: post.reblogged == true ? .green : nil
+                )
+            }
+            .accessibilityLabel(post.reblogged == true ? "Unboost" : "Boost")
+            .disabled(!canBoost)
+
+            Spacer(minLength: 0)
+
+            Button(action: onBookmark) {
+                actionIcon(
+                    post.bookmarked == true ? "bookmark.fill" : "bookmark",
+                    isHighlighted: post.bookmarked == true
+                )
+            }
+            .accessibilityLabel(post.bookmarked == true ? "Remove bookmark" : "Bookmark")
+
+            if let permalink = post.permalink {
+                ShareLink(item: permalink) {
+                    actionIcon("square.and.arrow.up")
+                }
+                .accessibilityLabel("Share")
+            }
+
+            Menu {
+                if !isDetail {
+                    Button("Open Post", systemImage: "text.bubble", action: onOpen)
+                }
+                if let permalink = post.permalink {
+                    Link(destination: permalink) {
+                        Label("Open in Browser", systemImage: "safari")
+                    }
+                    Button("Copy Link", systemImage: "link") {
+                        UIPasteboard.general.url = permalink
                     }
                 }
-                VStack(alignment: .leading) {
-                    RichContentView(content: account.displayName ?? account.acct, emojis: account.emojis ?? [])
-                        .font(.headline)
-                        .foregroundStyle(.primary)
-                    Text("@\(account.acct)")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
+                Button("Copy Text", systemImage: "doc.on.doc") {
+                    UIPasteboard.general.string = RichContentCache.shared
+                        .content(html: post.html, emoji: post.emojis)
+                        .plainText
                 }
+            } label: {
+                actionIcon("ellipsis")
+            }
+            .accessibilityLabel("More actions")
+        }
+        .font(.body)
+        .foregroundStyle(.secondary)
+        .buttonStyle(.plain)
+        .padding(.top, 2)
+    }
+
+    private func count(icon: String, value: Int, tint: Color? = nil) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: icon)
+                .contentTransition(.symbolEffect(.replace))
+            if value > 0 {
+                Text(value, format: .number.notation(.compactName))
+                    .contentTransition(.numericText())
+                    .monospacedDigit()
+                    .font(.subheadline)
             }
         }
+        .foregroundStyle(tint ?? .secondary)
+        // The minimum width keeps the arrangement of the row. A count with more
+        // digits does not move the other buttons.
+        .frame(minWidth: 46, minHeight: hitHeight, alignment: .leading)
+        .contentShape(.rect)
     }
+
+    /// A button with no count. It has the same touch area as a button with a
+    /// count.
+    private func actionIcon(_ name: String, isHighlighted: Bool = false) -> some View {
+        Image(systemName: name)
+            .contentTransition(.symbolEffect(.replace))
+            .foregroundStyle(isHighlighted ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
+            .frame(minWidth: hitHeight, minHeight: hitHeight)
+            .contentShape(.rect)
+    }
+}
+
+#Preview("Post") {
+    ScrollView {
+        VStack(spacing: 0) {
+            PostCell(status: .constant(.preview))
+            Divider()
+            PostCell(status: .constant(.previewBoost))
+            Divider()
+            PostCell(status: .constant(.previewSensitive))
+        }
+        .padding(.horizontal)
+    }
+    .previewEnvironment()
 }

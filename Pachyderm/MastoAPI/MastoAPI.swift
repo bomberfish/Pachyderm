@@ -6,434 +6,359 @@
 //
 
 import Foundation
-import Perception
+import Observation
+import os
 
-@Perceptible final class MastoAPI: Sendable {
-    private(set) public var instanceDomain: String
-    private(set) public var accessToken: String
+
+@MainActor
+@Observable
+final class MastoAPI {
+    /// The account of the user. `logIn` and `refreshCurrentAccount()` set it.
+    private(set) var currentAccount: Mastodon.Account?
+
+    private(set) var credentials: MastodonCredentials
     
-    private(set) public var me: Account?
-    
-    private var urlSession: URLSession = URLSession(configuration: .default)
-    
-    
-    private var decoder: JSONDecoder {
-        let decoder = JSONDecoder()
-        decoder.keyDecodingStrategy = .convertFromSnakeCase
-        return decoder
+    private(set) var instance: Mastodon.Instance?
+
+    /// The abilities of the software of this instance. The value starts from
+    /// the stored data for the current host. Thus the user interface can show
+    /// the correct controls in the first frame. A refresh follows.
+    private(set) var capabilities = APICapabilities.unknown
+
+    private static let logger = Logger(subsystem: "ca.bomberfish.Pachyderm", category: "api")
+
+    private enum StorageKey {
+        static let host = "instanceHost"
+        static let token = "accessToken"
+        /// The keys of an earlier build. That build put both values in
+        /// `UserDefaults`.
+        static let legacyHost = "baseURL"
+        static let legacyToken = "accessToken"
+
+        static func capabilities(for host: String) -> String { "capabilities.\(host)" }
     }
-    
-    init(instanceDomain: String, accessToken: String) {
-        self.instanceDomain = instanceDomain
-        self.accessToken = accessToken
-        self.login(instanceDomain: instanceDomain, accessToken: accessToken)
+
+    var host: String { credentials.host }
+    var isAuthenticated: Bool { credentials.isAuthenticated }
+
+    private var http: MastodonHTTP { MastodonHTTP(credentials: credentials) }
+
+    // MARK: - Session
+
+    init() {
+        credentials = Self.loadCredentials()
+        capabilities = Self.loadCapabilities(for: credentials.host)
     }
-    
-    func login(instanceDomain: String, accessToken: String) {
-        self.instanceDomain = instanceDomain
-        self.accessToken = accessToken
-        
-        DispatchQueue(label: "", qos: .background).async {
-            Task {
-                do {
-                    let acc = try await self.me()
-                    await MainActor.run {
-                        self.me = acc
-                    }
-                } catch {
-                    print(error)
-                }
-            }
+
+    /// The initializer for a preview and for a test. It makes a client and it
+    /// does not read the stored data.
+    init(credentials: MastodonCredentials, capabilities: APICapabilities = .unknown) {
+        self.credentials = credentials
+        self.capabilities = capabilities
+    }
+
+    private static func loadCredentials() -> MastodonCredentials {
+        let defaults = UserDefaults.standard
+        let stored = defaults.string(forKey: StorageKey.host)
+            ?? defaults.string(forKey: StorageKey.legacyHost)
+            ?? ""
+        let host = MastodonCredentials.normalize(host: stored)
+
+        // Do this migration one time. An earlier build put the token in
+        // `UserDefaults`. Move that token into the keychain. Then delete the
+        // copy that has no encryption.
+        if let legacy = defaults.string(forKey: StorageKey.legacyToken), !legacy.isEmpty {
+            Keychain.set(legacy, for: StorageKey.token)
+            defaults.removeObject(forKey: StorageKey.legacyToken)
+            logger.info("Migrated the access token from UserDefaults into the keychain.")
         }
+        defaults.removeObject(forKey: StorageKey.legacyHost)
+        defaults.set(host, forKey: StorageKey.host)
+
+        return MastodonCredentials(host: host, accessToken: Keychain.string(for: StorageKey.token))
     }
-    
-    enum TimelineType: String {
-        case home = "home"
-        case federated = "public?remote=true"
-        case local = "public?local=true"
-        case bubble = "public?bubble=true"
-    }
-    
-    @discardableResult func grab(endpoint: String, method: String = "GET", parameters: [String: Any]? = nil, body: [String:Any]? = nil) async throws -> Data {
-        var endpoint = endpoint
-        if endpoint.hasPrefix("/") {
-            endpoint = String(endpoint.dropFirst())
+
+    func logIn(host: String, accessToken: String) async throws {
+        let normalized = MastodonCredentials.normalize(host: host)
+        guard MastodonCredentials.isValid(host: normalized) else {
+            throw MastodonError.invalidHost(host)
         }
-        var urlComponents = URLComponents(url: URL(string: "https://\(instanceDomain)/api/\(endpoint)")!, resolvingAgainstBaseURL: false)
-        
-        if let parameters = parameters {
-            urlComponents?.queryItems = parameters.map { URLQueryItem(name: $0.key, value: "\($0.value)") }
+
+        let candidate = MastodonCredentials(host: normalized, accessToken: accessToken)
+        let account: Mastodon.Account = try await MastodonHTTP(credentials: candidate)
+            .get("v1/accounts/verify_credentials")
+
+        credentials = candidate
+        currentAccount = account
+        capabilities = Self.loadCapabilities(for: normalized)
+        UserDefaults.standard.set(normalized, forKey: StorageKey.host)
+        Keychain.set(accessToken, for: StorageKey.token)
+
+        // These are two more requests. The user must not wait for them.
+        Task { await refreshInstance() }
+    }
+
+    func logOut() {
+        credentials = MastodonCredentials(host: credentials.host, accessToken: nil)
+        currentAccount = nil
+        Keychain.remove(StorageKey.token)
+    }
+
+    @discardableResult
+    func refreshCurrentAccount() async throws -> Mastodon.Account {
+        try requireAuthentication()
+        let account: Mastodon.Account = try await http.get("v1/accounts/verify_credentials")
+        currentAccount = account
+        return account
+    }
+
+    // MARK: - Timelines
+
+    /// - Parameter olderThan: The id of the oldest status on the screen. The
+    ///   server sends the subsequent page after this status.
+    func statuses(
+        in timeline: Mastodon.Timeline,
+        olderThan: String? = nil,
+        limit: Int = 40
+    ) async throws -> [Mastodon.Status] {
+        try requireAuthentication()
+        var query = timeline.query
+        query["limit"] = String(limit)
+        if let olderThan { query["max_id"] = olderThan }
+        return try await http.get(timeline.path, query: query)
+    }
+
+    func statuses(
+        byAccount id: String,
+        feed: Mastodon.AccountFeed,
+        olderThan: String? = nil,
+        limit: Int = 40
+    ) async throws -> [Mastodon.Status] {
+        try requireAuthentication()
+        var query = feed.query
+        query["limit"] = String(limit)
+        if let olderThan { query["max_id"] = olderThan }
+        return try await http.get("v1/accounts/\(id)/statuses", query: query)
+    }
+
+    func notifications(olderThan: String? = nil, limit: Int = 40) async throws -> [Mastodon.Notification] {
+        try requireAuthentication()
+        var query = ["limit": String(limit)]
+        if let olderThan { query["max_id"] = olderThan }
+        return try await http.get("v1/notifications", query: query)
+    }
+
+    func conversations(olderThan: String? = nil, limit: Int = 40) async throws -> [Mastodon.Conversation] {
+        try requireAuthentication()
+        var query = ["limit": String(limit)]
+        if let olderThan { query["max_id"] = olderThan }
+        return try await http.get("v1/conversations", query: query)
+    }
+
+    // MARK: - Lookups
+
+    func status(id: String) async throws -> Mastodon.Status {
+        try requireAuthentication()
+        return try await http.get("v1/statuses/\(id)")
+    }
+
+    /// The thread of a status. The parent posts come in date order, oldest
+    /// first. The replies come in reply order.
+    func context(of id: String) async throws -> Mastodon.Context {
+        try requireAuthentication()
+        return try await http.get("v1/statuses/\(id)/context")
+    }
+
+    func account(id: String) async throws -> Mastodon.Account {
+        try requireAuthentication()
+        return try await http.get("v1/accounts/\(id)")
+    }
+
+    func search(_ query: String, limit: Int = 20) async throws -> Mastodon.SearchResults {
+        try requireAuthentication()
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return Mastodon.SearchResults(accounts: [], statuses: [], hashtags: [])
         }
-        
-        guard let url = urlComponents?.url else {
-            throw NSError(domain: "MastoAPIError", code: 0, userInfo: [NSLocalizedDescriptionKey: "Invalid URL"])
+        return try await http.get("v2/search", query: [
+            "q": trimmed,
+            "limit": String(limit),
+            "resolve": "true",
+        ])
+    }
+
+    // MARK: - Instance
+
+    func instance(host: String? = nil) async throws -> Mastodon.Instance {
+        guard let host else {
+            return try await http.get("v1/instance")
         }
-        print(url.absoluteString)
-        var request = URLRequest(url: url)
-        request.httpMethod = method
-        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
-        
-        if let body = body {
-            request.httpBody = try JSONSerialization.data(withJSONObject: body, options: [])
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let target = MastodonCredentials.normalize(host: host)
+        guard MastodonCredentials.isValid(host: target) else {
+            throw MastodonError.invalidHost(host)
         }
-        
-        let (data, response) = try await urlSession.data(for: request)
-        print((response as? HTTPURLResponse)?.statusCode ?? 0)
-        print(String(data: data, encoding: .utf8) ?? "\(data.count) bytes of data")
-        return data
+        // Send the token only to the instance of the user. A token for host A
+        // must not go to host B.
+        let credentials = target == self.credentials.host
+            ? self.credentials
+            : MastodonCredentials(host: target, accessToken: nil)
+        return try await MastodonHTTP(credentials: credentials).get("v1/instance")
     }
-    
-    func me() async throws -> Account {
-        let res = try await self.grab(endpoint: "/v1/accounts/verify_credentials")
-        return try decoder.decode(Account.self, from: res)
-    }
-    
-    func post(status: String, visibility: MastoAPI.Visibility, mediaIds: [String] = []) async throws {
-        let body: [String: Any] = ["status": status, "media_ids": mediaIds, "visibility": visibility.rawValue]
-        let res = try await self.grab(endpoint: "/v1/statuses", method: "POST", parameters: nil, body: body)
-        print(res)
-    }
-    
-    
-    func timeline(type: TimelineType, after id: String?) async throws -> [Status] {
-        var params: [String: Any]?
-        
-        if let id = id {
-            params = ["max_id": id]
+
+    /// Gets `/.well-known/nodeinfo` and then the document that it points to.
+    ///
+    /// This function makes two requests. The requests have no access token.
+    /// This is intentional. Refer to `MastodonHTTP.getPublic`.
+    func nodeInfo(host: String? = nil) async throws -> NodeInfo {
+        let target = MastodonCredentials.normalize(host: host ?? credentials.host)
+        guard MastodonCredentials.isValid(host: target) else {
+            throw MastodonError.invalidHost(host ?? credentials.host)
         }
-        
-        let data = try await grab(endpoint: "/v1/timelines/\(type.rawValue)", parameters: params)
-        return try decoder.decode([Status].self, from: data)
-    }
-    
-    func account(id: String) async throws -> Account {
-        let data = try await grab(endpoint: "/v1/accounts/\(id)")
-        return try decoder.decode(Account.self, from: data)
-    }
-    
-    func notifications() async throws -> [Notification] {
-        let data = try await grab(endpoint: "/v1/notifications")
-        return try decoder.decode([Notification].self, from: data)
-    }
-    
-    
-    enum AccountViewType: String {
-        case `default` = "exclude_replies=true"
-        case withReplies = "exclude_replies=false"
-        case onlyMedia = "only_media=true"
-        var dictValue: [String: Any] {
-            [self.rawValue.components(separatedBy: "=").first ?? "exclude_replies": self.rawValue.components(separatedBy: "=").last ?? "true"]
+        let http = MastodonHTTP(credentials: MastodonCredentials(host: target, accessToken: nil))
+
+        let index: NodeInfoIndex = try await http.getPublic(path: ".well-known/nodeinfo")
+        guard let href = index.preferredHref else {
+            throw MastodonError.transport("\(target) doesn't publish a NodeInfo document.")
         }
+        return try await http.getPublic(url: href)
     }
-    
-    func accountPosts(for account: Account, view: AccountViewType, after: String? = nil) async throws -> [Status] {
-        var params: [String: Any] = view.dictValue
-        
-        if let after = after {
-            params["max_id"] = after
+
+    // MARK: - Capabilities
+
+    /// Refreshes `instance` and `capabilities` for the current host.
+    ///
+    /// The function does the maximum that it can, but it does not fail. It
+    /// only adds data about the server. A server that answers neither request
+    /// stays usable.
+    @discardableResult
+    func refreshInstance() async -> APICapabilities {
+        // NodeInfo is the primary source. Each fork gives correct data in that
+        // document. `/api/v1/instance` completes the missing data, and it also
+        // gives the post limits.
+        async let fetchedNode = try? nodeInfo()
+        async let fetchedInstance = try? instance()
+
+        let node = await fetchedNode
+        let details = await fetchedInstance
+
+        var detected = node.map(APICapabilities.init(nodeInfo:)) ?? .unknown
+        if let details {
+            instance = details
+            detected = detected.merging(APICapabilities(instance: details))
         }
-        
-        let data = try await grab(endpoint: "/v1/accounts/\(account.id)/statuses", parameters: params)
-        let posts = try decoder.decode([Status].self, from: data)
-        return posts
-    }
-    
-    @discardableResult func favourite(_ post: Status) async throws -> Status {
-        let endpoint = post.favourited == true ? "unfavourite" : "favourite"
-        let data = try await grab(endpoint: "/v1/statuses/\(post.id)/\(endpoint)", method: "POST")
-        return try decoder.decode(Status.self, from: data)
-    }
-    
-    @discardableResult func reblog(_ post: Status) async throws -> Status {
-        let endpoint = post.reblogged == true ? "unreblog" : "reblog"
-        try await grab(endpoint: "/v1/statuses/\(post.id)/\(endpoint)", method: "POST")
-        let newPost = post
-        newPost.reblogged?.toggle()
-        newPost.reblogsCount += 1
-        return newPost
-    }
-    
-    enum Visibility: String, Codable {
-        case `public` = "public"
-        case unlisted = "unlisted"
-        case `private` = "private"
-        case direct = "direct"
-    }
-    
-    class Status: Codable, Identifiable {
-        let id: String
-        let createdAt: String?
-        let inReplyToId: String?
-        let inReplyToAccountId: String?
-        let sensitive: Bool
-        let spoilerText: String?
-        let visibility: Visibility
-        let language: String?
-        let uri: String
-        let url: String?
-        let repliesCount: Int
-        var reblogsCount: Int
-        let favouritesCount: Int
-        let reactionsCount: Int?
-        let editedAt: String?
-        let conversationId: Int?
-        var favourited: Bool?
-        var reblogged: Bool?
-        let muted: Bool?
-        let bookmarked: Bool?
-        let pinned: Bool?
-        let localOnly: Bool?
-        let content: String
-        let filtered: [FilterResult]?
-        var reblog: Status?
-        let account: Account
-        let mediaAttachments: [MediaAttachment]?
-        let mentions: [Mention]?
-        let tags: [Tag]?
-        let emojis: [Emoji]?
-        let reactions: [Reaction]?
-        let quote: QuoteStatus?
-        let card: Card?
-        let poll: Poll?
-        let application: ApplicationInfo?
-    }
-    
-    // quotes are very broken
-    struct QuoteStatus: Codable, Identifiable, Hashable {
-        let id: String?
-        let content: String?
-    }
-    
-    struct Account: Codable, Identifiable, Hashable {
-        let id: String
-        let username: String
-        let acct: String
-        let displayName: String?
-        let locked: Bool
-        let bot: Bool
-        let discoverable: Bool?
-        let indexable: Bool?
-        let group: Bool
-        let createdAt: String?
-        let note: String
-        let url: String
-        let uri: String
-        let avatar: String
-        let avatarStatic: String
-        let avatarDescription: String?
-        let header: String
-        let headerStatic: String
-        let headerDescription: String?
-        let followersCount: Int
-        let followingCount: Int
-        let statusesCount: Int
-        let lastStatusAt: String?
-        let hideCollections: Bool?
-        let emojis: [Emoji]?
-        let fields: [Field]?
-        let roles: [Role]?
-    }
-    
-    struct MediaAttachment: Codable, Identifiable, Hashable {
-        let id: String
-        let type: String // e.g., "image", "video", "gifv", "audio"
-        let url: String
-        let previewUrl: String?
-        let remoteUrl: String?
-        let previewRemoteUrl: String?
-        let textUrl: String?
-        let description: String?
-        let blurhash: String?
-        let meta: MediaMeta?
-    }
-    
-    struct Mention: Codable, Identifiable, Hashable {
-        let id: String
-        let username: String
-        let url: String
-        let acct: String
-    }
-    
-    struct Tag: Codable, Hashable {
-        let name: String
-        let url: String
-    }
-    
-    struct Emoji: Codable, Identifiable, Hashable {
-        let shortcode: String
-        let url: String
-        let staticUrl: String?
-        let visibleInPicker: Bool
-        
-        var id: String { shortcode }
-    }
-    
-    struct Field: Codable, Hashable {
-        let name: String
-        let value: String
-        let verifiedAt: String?
+
+        capabilities = detected
+        Self.store(detected, for: credentials.host)
+        Self.logger.info("\(self.credentials.host, privacy: .public) is \(detected.summary, privacy: .public)")
+        return detected
     }
 
-    struct ApplicationInfo: Codable, Hashable {
-        let name: String
-        let website: String?
+    /// Makes no request when this launch has the data.
+    func refreshInstanceIfNeeded() async {
+        guard instance == nil || !capabilities.isDetected else { return }
+        await refreshInstance()
     }
 
-    struct MediaFocus: Codable, Hashable {
-        let x: Double
-        let y: Double
+    /// Tells you if the app can offer an optional feature. An unknown server
+    /// gives `false`. Thus use this function only for an added feature.
+    func supports(_ requirements: APICapabilityRequirements) -> Bool {
+        capabilities.satisfies(requirements)
     }
 
-    struct MediaSize: Codable, Hashable {
-        let width: Int?
-        let height: Int?
-        let size: String?
-        let aspect: Double?
-        let frameRate: String?
-        let duration: Double?
-        let bitrate: Int?
+    /// The tolerant function. It gives `true`, except when the app knows that
+    /// the server does not have the feature. Use it for a feature that has
+    /// correct code. A hidden control on an unknown fork is worse than one
+    /// error message.
+    func supportsOrUnknown(_ requirements: APICapabilityRequirements) -> Bool {
+        !capabilities.isDetected || capabilities.satisfies(requirements)
     }
 
-    struct MediaMeta: Codable, Hashable {
-        let original: MediaSize?
-        let small: MediaSize?
-        let focus: MediaFocus?
-    }
-    
-    // New struct for Account roles
-    struct Role: Codable, Identifiable, Hashable {
-        let id: String
-        let name: String
-        let color: String?
+    /// Stops a request before the app sends it, and gives a clear message. The
+    /// alternative is an unclear message from the server about an unknown
+    /// endpoint.
+    func requireSupport(_ requirements: APICapabilityRequirements, for feature: String) throws {
+        guard !supportsOrUnknown(requirements) else { return }
+        throw MastodonError.unsupported(feature: feature, software: capabilities.summary)
     }
 
-    // New structs for Post fields
-    struct Filter: Codable, Identifiable, Hashable {
-        let id: String
-        let title: String
-        let context: [String]
-        let expiresAt: String?
-        let irreversible: Bool?
-        let wholeWord: Bool?
-        // let filterAction: String // e.g., "warn", "hide" - add if needed
+    private static func loadCapabilities(for host: String) -> APICapabilities {
+        guard !host.isEmpty,
+              let data = UserDefaults.standard.data(forKey: StorageKey.capabilities(for: host)),
+              let stored = try? JSONDecoder().decode(APICapabilities.self, from: data)
+        else { return .unknown }
+        return stored
     }
 
-    struct FilterResult: Codable, Hashable {
-        let filter: Filter
-        let keywordMatches: [String]?
-        let statusMatches: [String]?
+    private static func store(_ capabilities: APICapabilities, for host: String) {
+        guard !host.isEmpty else { return }
+        let key = StorageKey.capabilities(for: host)
+        guard capabilities != .unknown, let data = try? JSONEncoder().encode(capabilities) else {
+            UserDefaults.standard.removeObject(forKey: key)
+            return
+        }
+        UserDefaults.standard.set(data, forKey: key)
     }
 
-    struct Reaction: Codable, Identifiable, Hashable {
-        let name: String
-        let count: Int
-        let me: Bool?
-        let url: String?
-        let staticUrl: String?
+    // MARK: - Publishing
 
-        var id: String { name }
+    @discardableResult
+    func post(
+        _ text: String,
+        visibility: Mastodon.Visibility = .public,
+        spoilerText: String? = nil,
+        inReplyTo: String? = nil
+    ) async throws -> Mastodon.Status {
+        try requireAuthentication()
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw MastodonError.server(status: 422, message: "A post can't be empty.")
+        }
+        let warning = spoilerText?.trimmingCharacters(in: .whitespacesAndNewlines)
 
-//        enum CodingKeys: String, CodingKey {
-//            case name, count, me, url
-//            case staticUrl = "static_url"
-//        }
+        return try await http.send("v1/statuses", method: .post, json: NewStatus(
+            status: trimmed,
+            // The value `.unknown` comes only from the post of a different
+            // user. Test the value here, because the server must not get an
+            // incorrect visibility value.
+            visibility: (visibility == .unknown ? .public : visibility).rawValue,
+            spoilerText: (warning?.isEmpty == false) ? warning : nil,
+            inReplyToId: inReplyTo
+        ))
     }
-    
-    struct Card: Codable {
-        let url: String
-        let title: String
-        let description: String
-        let language: String?
-        let type: String // "link", "photo", "video", "rich"
-        let authorName: String?
-        let authorUrl: String?
-        let providerName: String?
-        let providerUrl: String?
-        let html: String?
-        let width: Int?
-        let height: Int?
-        let image: String?
-        let imageDescription: String?
-        let embedUrl: String?
-        let blurhash: String?
-        let publishedAt: String?
-        let authors: [CardAuthor]?
+
+    // MARK: - Interactions
+
+    /// Sets the favourite flag. It gives the new status from the server.
+    func setFavourited(_ favourited: Bool, on status: Mastodon.Status) async throws -> Mastodon.Status {
+        try await interact(with: status, action: favourited ? "favourite" : "unfavourite")
     }
-    
-    struct CardAuthor: Codable {
-        let name: String
-        let url: String?
-        // let account: String? // or a more complex AccountPreview struct if needed
+
+    func setReblogged(_ reblogged: Bool, on status: Mastodon.Status) async throws -> Mastodon.Status {
+        let result = try await interact(with: status, action: reblogged ? "reblog" : "unreblog")
+        return result.reblog?.value ?? result
     }
-    
-    struct Poll: Codable, Identifiable {
-        let id: String
-        let expiresAt: String?
-        let expired: Bool
-        let multiple: Bool
-        let votesCount: Int
-        let votersCount: Int?
-        let voted: Bool?
-        let ownVotes: [Int]?
-        let options: [PollOption]
-        let emojis: [Emoji]?
+
+    func setBookmarked(_ bookmarked: Bool, on status: Mastodon.Status) async throws -> Mastodon.Status {
+        try await interact(with: status, action: bookmarked ? "bookmark" : "unbookmark")
     }
-    
-    struct PollOption: Codable {
-       let title: String
-       let votesCount: Int?
+
+    private func interact(with status: Mastodon.Status, action: String) async throws -> Mastodon.Status {
+        try requireAuthentication()
+        return try await http.send("v1/statuses/\(status.id)/\(action)", method: .post)
     }
-    
-    struct Notification: Codable, Hashable {
-        let type: String
-        let status: Status?
-        let account: Account
+
+    // MARK: - Helpers
+
+    private func requireAuthentication() throws {
+        guard credentials.isAuthenticated else { throw MastodonError.notAuthenticated }
     }
 }
 
-extension MastoAPI.Status: Hashable {
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(id)
-    }
-    
-    public static func == (lhs: MastoAPI.Status, rhs: MastoAPI.Status) -> Bool {
-        return lhs.id == rhs.id
-    }
-}
-
-extension MastoAPI.TimelineType {
-    var description: String {
-        switch self {
-        case .home: "Home"
-        case .federated: "Federated"
-        case .local: "Local"
-        case .bubble: "Bubble"
-        @unknown default: self.rawValue
-        }
-    }
-}
-
-extension MastoAPI.Visibility {
-    var description: String {
-        switch self {
-        case .public: "Public"
-        case .unlisted: "Quiet Public"
-        case .private: "Followers Only"
-        case .direct: "Direct"
-        @unknown default: self.rawValue.capitalized
-        }
-    }
-    
-    var icon: String {
-        switch self {
-        case .public: "network"
-        case .unlisted: "moon"
-        case .private: "lock"
-        case .direct: "envelope"
-        @unknown default: "eye"
-        }
-    }
-    
-    static var allCases = [Self.public, Self.unlisted, Self.private, Self.direct]
+/// The body of a `POST /api/v1/statuses` request.
+private nonisolated struct NewStatus: Encodable {
+    var status: String
+    var visibility: String
+    var spoilerText: String?
+    var inReplyToId: String?
 }

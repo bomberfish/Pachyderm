@@ -6,78 +6,123 @@
 //
 
 import SwiftUI
-import PerceptionCore
 
+/// The notifications tab.
 struct NotificationsView: View {
-    @State var notifications: [MastoAPI.Notification] = []
-    @Environment(MastoAPI.self) private var api: MastoAPI
+    @Environment(MastoAPI.self) private var api
+
+    @State private var model: PagedListModel<Mastodon.Notification>?
+
     var body: some View {
-        WithPerceptionTracking {
-            ScrollView {
-                LazyVStack {
-                    ForEach(notifications, id: \.self) { notification in
-                        VStack {
-                            NotificationItem(notification: notification)
-                            if notification != notifications.last {
-                                Divider()
-                            }
-                        }
-                    }
-                }
-                .padding(.horizontal)
+        Group {
+            if let model {
+                list(model)
+            } else {
+                ProgressView()
             }
-            .toolbar {
-                if #available(iOS 19.0, *) {
-                    ToolbarItem(placement: .navigationBarLeading) {
-                        Text("Notifications")
-                            .font(.title.weight(.semibold))
-                            .fixedSize()
-                            .padding(.leading, 4)
-                    }
-                    .sharedBackgroundVisibility(.hidden)
-                } else {
-                    ToolbarItem(placement: .navigationBarLeading) {
-                        Text("Notifications")
-                            .font(.title.weight(.semibold))
-                            .fixedSize()
-                            .padding(.leading, 4)
-                    }
-                }
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    AccountMenu()
-                        .frame(width: AvatarUIScale.regular.rawValue, height:  AvatarUIScale.regular.rawValue)
+        }
+        .tabToolbar("Notifications")
+        .task {
+            if model == nil {
+                let api = api
+                model = PagedListModel { olderThan in
+                    try await api.notifications(olderThan: olderThan)
                 }
             }
-            .task {
-                do {
-                    notifications = try await api.notifications()
-                } catch {
-                    await UIApplication.shared.alertError(error)
+        }
+    }
+
+    private func list(_ model: PagedListModel<Mastodon.Notification>) -> some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 0) {
+                ForEach(model.items) { notification in
+                    NotificationRow(notification: notification)
+                        .padding(.horizontal)
+                    Divider()
+                }
+
+                if model.phase == .loaded && model.hasMore {
+                    ProgressView()
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 24)
+                        .onAppear { model.loadMore() }
+                }
+            }
+        }
+        .refreshable { await model.refresh() }
+        .task { model.loadIfNeeded() }
+        .overlay {
+            if model.isEmpty {
+                switch model.phase {
+                case .idle, .loading:
+                    ProgressView()
+                case .loaded:
+                    ContentUnavailableView(
+                        "No Notifications",
+                        systemImage: "bell",
+                        description: Text("Mentions, boosts and follows show up here.")
+                    )
+                case .failed(let message):
+                    ContentUnavailableView {
+                        Label("Couldn't Load Notifications", systemImage: "exclamationmark.triangle")
+                    } description: {
+                        Text(message)
+                    } actions: {
+                        Button("Try Again") { model.load() }
+                            .buttonStyle(.glassBackportProminent)
+                    }
                 }
             }
         }
     }
 }
 
-struct NotificationItem: View {
-    public var notification: MastoAPI.Notification
+/// One notification. It shows the account, the action and the related post.
+///
+/// The post in the row is a small copy. It is not a cell that accepts a command.
+/// The earlier row gave `.constant(status)` to a `PostCell` view with its
+/// buttons. Thus a touch on the favourite button caused no movement and sent no
+/// request.
+struct NotificationRow: View {
+    let notification: Mastodon.Notification
+
+    @Environment(Navigator.self) private var navigator
+
     var body: some View {
-        if let st = notification.status {
-            NavigationLink(destination: PostDetailView(post: .constant(st))) {
-                VStack(alignment: .leading) {
-                    Text(notification.type.capitalized + " from @" + notification.account.username)
-                    PostCell(post: .constant(st))
-                        .allowsHitTesting(false)
+        VStack(alignment: .leading, spacing: 6) {
+            Button {
+                navigator.open(notification.account)
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: notification.type.icon)
+                        .foregroundStyle(.tint)
+                        .frame(width: 20)
+                    AvatarView(account: notification.account, size: .small)
+                    Text(notification.type.summary(for: notification.account))
+                        .font(.subheadline.weight(.medium))
+                        .lineLimit(2)
+                    Spacer(minLength: 0)
+                    if let createdAt = notification.createdAt {
+                        Text(createdAt, format: .relative(presentation: .numeric, unitsStyle: .narrow))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
-        } else {
-            VStack(alignment: .leading) {
-                Text(notification.type.capitalized + " from @" + notification.account.username)
+            .buttonStyle(.plain)
+
+            if let status = notification.status {
+                PostCell(status: .constant(status), showsActions: false)
+                    .padding(.leading, 28)
+                    .contentShape(.rect)
+                    .onTapGesture { navigator.open(status) }
             }
         }
+        .padding(.vertical, 6)
     }
 }
 
 #Preview {
     NotificationsView()
+        .previewEnvironment()
 }

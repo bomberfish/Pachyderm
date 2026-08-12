@@ -1,58 +1,26 @@
 // bomberfish
-// fancyViewInputModifier.swift – Picasso
+// FancyInputViewModifier.swift – Picasso
 // created on 2023-12-08
 
 import SwiftUI
 
 public struct FancyInputViewModifier: ViewModifier {
-    @Environment(\.colorScheme) private var colorScheme
-    public func body(content: Content) -> some View {
-        Group {
-            if #available(iOS 19.0, *) {
-                content
-                    .frame(minHeight: 32)
-                    .padding(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
-                    .textEditorStyle(.plain)
-                    .textFieldStyle(.plain)
-                    .glassEffect(.regular.interactive(), in: .capsule)
-            } else {
-                content
-                    .overlay(
-                        RoundedRectangle(cornerRadius: .infinity)
-                            .stroke(colorScheme == .dark ? .white.opacity(0.035): Color.accentColor.opacity(0.4), lineWidth: 2)
-                            .frame(minHeight: 48, idealHeight: 48)
-                    )
-                    .background(
-                        .ultraThinMaterial
-                    )
+    public init() {}
 
-                    .cornerRadius(.infinity)
-            }
-                
-        }
-            .frame(minHeight: 32)
-        .cornerRadius(14)
+    public func body(content: Content) -> some View {
+        content
+            .textFieldStyle(.plain)
+            .textEditorStyle(.plain)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .frame(minHeight: 44)
+            .glassBackport(.regular(nil, true), in: Capsule())
     }
 }
 
-//fileprivate struct Glass: ViewModifier {
-//    @Environment(\.colorScheme) private var colorScheme
-//    public func body(content: Content) -> some View {
-//        if #available(iOS 19.0, *) {
-//            content
-//                .glassEffect(.regular.interactive(), in: .capsule)
-//        } else {
-//            content
-//                .overlay(
-//                    RoundedRectangle(cornerRadius: .infinity)
-//                        .stroke(colorScheme == .dark ? .white.opacity(0.035): Color.accentColor.opacity(0.4), lineWidth: 2)
-//                        .frame(minHeight: 48, idealHeight: 48)
-//                )
-//                .background(
-//                    .ultraThinMaterial
-//                )
-//
-//                .cornerRadius(.infinity)
-//        }
-//    }
-//}
+extension View {
+    /// A short form of `.modifier(FancyInputViewModifier())`.
+    func fancyInput() -> some View {
+        modifier(FancyInputViewModifier())
+    }
+}

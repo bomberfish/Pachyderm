@@ -1,0 +1,151 @@
+//
+//  PagedListModel.swift
+//  Pachyderm
+//
+
+import Foundation
+import Observation
+import os
+
+/// The page state of one list from the API.
+///
+/// The timeline screen, the profile screen and the notification screen each had
+/// their own load code, refresh code and load-more code. All three copies had
+/// the same three defects. Two requests at the same time made two copies of a
+/// row. An unsuccessful load left an activity indicator on the screen for all
+/// time. At the end of a feed the screen continued to send requests.
+///
+/// The class is generic. Thus posts, notifications and conversations can use
+/// it.
+@MainActor
+@Observable
+final class PagedListModel<Item: Identifiable & Sendable> where Item.ID == String {
+    /// Gets one page. The `olderThan` value is the id of the last item on the
+    /// screen. It is nil for the first page. The closure is `@MainActor`,
+    /// because it holds the client.
+    typealias Source = @MainActor (_ olderThan: String?) async throws -> [Item]
+
+    enum Phase: Equatable {
+        case idle
+        case loading
+        case loaded
+        case failed(String)
+    }
+
+    /// The property is not read-only. Thus `ForEach($model.items)` can give a
+    /// binding to each row. A favourite operation or a boost operation then
+    /// changes only that row. The list does not load again.
+    var items: [Item] = []
+    private(set) var phase: Phase = .idle
+    private(set) var isLoadingMore = false
+    /// False after the server sends a page with less items than the page size.
+    /// A subsequent request gives no more items.
+    private(set) var hasMore = true
+
+    private let pageSize: Int
+    private var source: Source
+    private var task: Task<Void, Never>?
+    private var seenIDs = Set<String>()
+
+    init(pageSize: Int = 40, source: @escaping Source) {
+        self.pageSize = pageSize
+        self.source = source
+    }
+
+    var isEmpty: Bool { items.isEmpty }
+
+    /// Changes the feed and loads it. An example is a change from Home to
+    /// Federated.
+    func replaceSource(_ source: @escaping Source) {
+        self.source = source
+        task?.cancel()
+        items = []
+        seenIDs = []
+        hasMore = true
+        phase = .idle
+        load()
+    }
+
+    /// The first load. A `.task` modifier can call it at each appearance. The
+    /// function does nothing when the list has content.
+    func loadIfNeeded() {
+        guard phase == .idle else { return }
+        load()
+    }
+
+    func load() {
+        task?.cancel()
+        phase = .loading
+        task = Task { [weak self] in
+            await self?.fetchFirstPage()
+        }
+    }
+
+    /// The pull-to-refresh function. It is `async`. Thus SwiftUI keeps the
+    /// activity indicator on the screen until the load operation ends.
+    func refresh() async {
+        task?.cancel()
+        task = Task { [weak self] in
+            await self?.fetchFirstPage()
+        }
+        await task?.value
+    }
+
+    func loadMore() {
+        guard hasMore, !isLoadingMore, phase == .loaded, let last = items.last else { return }
+
+        isLoadingMore = true
+        Task { [weak self] in
+            guard let self else { return }
+            defer { self.isLoadingMore = false }
+            do {
+                let page = try await self.source(last.id)
+                guard !Task.isCancelled else { return }
+                self.append(page)
+            } catch is CancellationError {
+                // The user scrolled away. Report nothing.
+            } catch {
+                // Keep the items on the screen. But do not send a new request
+                // at each scroll movement.
+                self.hasMore = false
+                Log.ui.error("Loading another page failed: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    /// Puts a new item at the top. A new post of the user is an example.
+    func prepend(_ item: Item) {
+        guard seenIDs.insert(item.id).inserted else { return }
+        items.insert(item, at: 0)
+    }
+
+    // MARK: - Private
+
+    private func fetchFirstPage() async {
+        do {
+            let page = try await source(nil)
+            guard !Task.isCancelled else { return }
+            items = []
+            seenIDs = []
+            append(page)
+            phase = .loaded
+        } catch is CancellationError {
+            // A newer load operation replaced this one. That operation sets
+            // the phase.
+        } catch {
+            guard !Task.isCancelled else { return }
+            phase = .failed((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
+        }
+    }
+
+    /// Adds the new items. It removes an item that is on the screen.
+    ///
+    /// Two pages contain the same item when a person makes a post during the
+    /// scroll movement. Two equal ids in a `ForEach` view make SwiftUI remove
+    /// rows and write warnings.
+    private func append(_ page: [Item]) {
+        let fresh = page.filter { seenIDs.insert($0.id).inserted }
+        items.append(contentsOf: fresh)
+        hasMore = page.count >= pageSize
+    }
+}

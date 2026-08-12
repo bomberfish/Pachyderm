@@ -8,7 +8,7 @@
 			<key>CFBundleTypeRole</key>
 			<string>Viewer</string>
 			<key>CFBundleURLName</key>
-			<string>com.bomberfish.Pachyderm</string>
+			<string>ca.bomberfish.Pachyderm</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
 				<string>pachyderm</string>
