@@ -147,6 +147,11 @@ final class MastoAPI {
         if let olderThan { query["max_id"] = olderThan }
         return try await http.get("v1/notifications", query: query)
     }
+    
+    func unreadNotificationCount() async throws -> Mastodon.UnreadNotificationCount {
+        try requireAuthentication()
+        return try await http.get("v1/notifications/unread_count");
+    }
 
     func conversations(olderThan: String? = nil, limit: Int = 40) async throws -> [Mastodon.Conversation] {
         try requireAuthentication()

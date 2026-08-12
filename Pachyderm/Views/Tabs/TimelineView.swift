@@ -30,6 +30,11 @@ struct TimelineView: View {
         .toolbarTitleDisplayMode(.inlineLarge)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
+                Button("New Post", systemImage: "square.and.pencil") {
+                    isComposing = true
+                }
+            }
+            ToolbarItem(placement: .topBarTrailing) {
                 Menu {
                     Picker("Timeline", selection: $timeline) {
                         ForEach(Mastodon.Timeline.validCases(api)) { option in
@@ -41,11 +46,6 @@ struct TimelineView: View {
                 }
             }
             ToolbarItem(placement: .topBarTrailing) {
-                Button("New Post", systemImage: "square.and.pencil") {
-                    isComposing = true
-                }
-            }
-            ToolbarItem(placement: .topBarTrailing) {
                 AccountMenu()
             }
         }
@@ -53,6 +53,8 @@ struct TimelineView: View {
             ComposeView { created in
                 model?.prepend(created)
             }
+            .presentationCompactAdaptation(horizontal: .fullScreenCover, vertical: .popover)
+            .presentationBackground(Color(UIColor.systemBackground))
         }
         .task {
             if model == nil {

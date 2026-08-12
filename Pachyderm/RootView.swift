@@ -27,7 +27,8 @@ struct MainView: View {
     @Environment(ErrorPresenter.self) private var errors
 
     @State private var searchQuery = ""
-
+    @State private var unreadNotifications: Int = 0
+    
     var body: some View {
         TabView {
             Tab("Timeline", systemImage: "rectangle.stack") {
@@ -43,6 +44,7 @@ struct MainView: View {
             Tab("Notifications", systemImage: "bell") {
                 MastodonNavigationStack { NotificationsView() }
             }
+            .badge(unreadNotifications)
             Tab("Messages", systemImage: "bubble.left.and.bubble.right") {
                 MastodonNavigationStack { MessagesView() }
             }
@@ -71,6 +73,7 @@ struct MainView: View {
                 }
                 errors.present(error, title: "Couldn't load your account")
             }
+            unreadNotifications = (try? await api.unreadNotificationCount().count) ?? 0
         }
     }
 }

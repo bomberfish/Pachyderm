@@ -26,102 +26,40 @@
         {
           "fill-specializations" : [
             {
-              "value" : {
-                "solid" : "extended-srgb:0.00000,0.53333,1.00000,1.00000"
-              }
-            },
-            {
               "appearance" : "dark",
               "value" : {
-                "solid" : "display-p3:0.14776,0.33301,1.00000,1.00000"
-              }
-            }
-          ],
-          "image-name" : "Path 2.svg",
-          "name" : "Path 2",
-          "position-specializations" : [
-            {
-              "value" : {
-                "scale" : 1,
-                "translation-in-points" : [
-                  -86.1842251574185,
-                  -140.8783904887116
-                ]
+                "solid" : "srgb:0.90271,0.10029,0.00000,1.00000"
               }
             },
             {
+              "appearance" : "tinted",
+              "value" : {
+                "solid" : "srgb:0.00000,0.00000,0.00000,1.00000"
+              }
+            },
+            {
+              "appearance" : "light",
               "idiom" : "square",
-              "value" : {
-                "scale" : 1.5,
-                "translation-in-points" : [
-                  -150.2716678787139,
-                  14.183980873626865
-                ]
-              }
-            }
-          ]
-        },
-        {
-          "fill-specializations" : [
-            {
-              "value" : {
-                "solid" : "srgb:0.12575,0.60817,0.00000,1.00000"
-              }
-            },
-            {
-              "appearance" : "dark",
-              "value" : {
-                "solid" : "srgb:0.12977,0.55726,0.00000,1.00000"
-              }
-            }
-          ],
-          "image-name" : "Path 2.svg",
-          "name" : "Path 2",
-          "position-specializations" : [
-            {
-              "value" : {
-                "scale" : 1,
-                "translation-in-points" : [
-                  -86.1842251574185,
-                  -140.8783904887116
-                ]
-              }
-            },
-            {
-              "idiom" : "square",
-              "value" : {
-                "scale" : 1.5,
-                "translation-in-points" : [
-                  1.5844104638578642,
-                  14.183980873626865
-                ]
-              }
-            }
-          ]
-        },
-        {
-          "fill-specializations" : [
-            {
               "value" : {
                 "solid" : "srgb:0.87871,0.08684,0.00000,1.00000"
               }
-            },
-            {
-              "appearance" : "dark",
-              "value" : {
-                "solid" : "srgb:0.70310,0.06948,0.00000,1.00000"
-              }
             }
           ],
-          "image-name" : "Path 2.svg",
-          "name" : "Path 2",
+          "image-name" : "Image 4.svg",
+          "name" : "Image 4",
+          "opacity-specializations" : [
+            {
+              "appearance" : "dark",
+              "value" : 0.71
+            }
+          ],
           "position-specializations" : [
             {
               "value" : {
                 "scale" : 1,
                 "translation-in-points" : [
-                  -86.1842251574185,
-                  -140.8783904887116
+                  1.4811389888579924,
+                  13.774557073626852
                 ]
               }
             },
@@ -130,8 +68,89 @@
               "value" : {
                 "scale" : 1.5,
                 "translation-in-points" : [
-                  -72.87970163107019,
-                  -120.22188865613964
+                  -74.44690018242807,
+                  -120.63131245613965
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "fill-specializations" : [
+            {
+              "appearance" : "tinted",
+              "value" : {
+                "solid" : "srgb:0.00000,0.00000,0.00000,1.00000"
+              }
+            },
+            {
+              "appearance" : "light",
+              "idiom" : "square",
+              "value" : {
+                "solid" : "extended-srgb:0.00000,0.53333,1.00000,1.00000"
+              }
+            }
+          ],
+          "image-name" : "Image 4.svg",
+          "name" : "Image 4",
+          "position-specializations" : [
+            {
+              "value" : {
+                "scale" : 1,
+                "translation-in-points" : [
+                  1.4811389888579924,
+                  13.774557073626852
+                ]
+              }
+            },
+            {
+              "idiom" : "square",
+              "value" : {
+                "scale" : 1.5,
+                "translation-in-points" : [
+                  -150.3749393537139,
+                  13.774557073626852
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "fill-specializations" : [
+            {
+              "appearance" : "tinted",
+              "value" : {
+                "solid" : "srgb:0.00000,0.00000,0.00000,1.00000"
+              }
+            },
+            {
+              "appearance" : "light",
+              "idiom" : "square",
+              "value" : {
+                "solid" : "srgb:0.12575,0.60817,0.00000,1.00000"
+              }
+            }
+          ],
+          "hidden" : false,
+          "image-name" : "Image 4.svg",
+          "name" : "Image 4",
+          "position-specializations" : [
+            {
+              "value" : {
+                "scale" : 1,
+                "translation-in-points" : [
+                  1.4811389888579924,
+                  13.774557073626852
+                ]
+              }
+            },
+            {
+              "idiom" : "square",
+              "value" : {
+                "scale" : 1.5,
+                "translation-in-points" : [
+                  1.4811389888579924,
+                  13.774557073626852
                 ]
               }
             }
@@ -145,6 +164,7 @@
           "value" : "individual"
         }
       ],
+      "name" : "Group",
       "opacity-specializations" : [
         {
           "appearance" : "dark",
@@ -153,12 +173,20 @@
       ],
       "refractivity-specializations" : [
         {
+          "appearance" : "tinted",
+          "value" : {
+            "depth" : 0,
+            "enabled" : true,
+            "strength" : 0.0630859375
+          }
+        },
+        {
           "appearance" : "light",
           "idiom" : "square",
           "value" : {
             "depth" : 0,
-            "enabled" : false,
-            "strength" : 0.5
+            "enabled" : true,
+            "strength" : -0.0069140625
           }
         }
       ],
@@ -166,13 +194,13 @@
         {
           "value" : {
             "kind" : "layer-color",
-            "opacity" : 0.8
+            "opacity" : 0.45
           }
         },
         {
           "appearance" : "dark",
           "value" : {
-            "kind" : "layer-color",
+            "kind" : "none",
             "opacity" : 0.6
           }
         }
@@ -180,16 +208,16 @@
       "specular-specializations" : [
         {
           "appearance" : "dark",
-          "value" : "inside"
+          "value" : true
         },
         {
           "appearance" : "tinted",
-          "value" : true
+          "value" : false
         },
         {
           "appearance" : "light",
           "idiom" : "square",
-          "value" : "inside"
+          "value" : true
         }
       ],
       "translucency-specializations" : [
@@ -203,6 +231,13 @@
           "appearance" : "dark",
           "value" : {
             "enabled" : true,
+            "value" : 0.5000000000000001
+          }
+        },
+        {
+          "appearance" : "tinted",
+          "value" : {
+            "enabled" : false,
             "value" : 0.4
           }
         }
@@ -217,8 +252,8 @@
               "appearance" : "dark",
               "value" : {
                 "linear-gradient" : [
-                  "display-p3:0.49366,0.70750,1.00000,1.00000",
-                  "srgb:0.85650,0.65717,1.00000,1.00000"
+                  "srgb:0.64225,0.39673,0.68920,1.00000",
+                  "display-p3:0.21815,0.37368,0.58642,1.00000"
                 ]
               }
             }
@@ -272,7 +307,7 @@
             {
               "appearance" : "dark",
               "value" : {
-                "solid" : "srgb:0.72221,0.62192,0.87312,1.00000"
+                "solid" : "srgb:0.46954,0.46536,0.87312,1.00000"
               }
             }
           ],

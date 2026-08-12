@@ -301,6 +301,10 @@ extension Mastodon {
 // MARK: - Notifications
 
 extension Mastodon {
+    nonisolated struct UnreadNotificationCount: Codable, Hashable, Sendable {
+        var count: Int
+    }
+    
     nonisolated struct Notification: Codable, Identifiable, Hashable, Sendable {
         var id: String
         var type: Kind
