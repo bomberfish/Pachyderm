@@ -52,8 +52,6 @@ struct SearchView: View {
                     Section("Posts") {
                         ForEach(results.statuses) { status in
                             PostCell(status: .constant(status), showsActions: false)
-                                .contentShape(.rect)
-                                .onTapGesture { navigator.open(status) }
                         }
                     }
                 }

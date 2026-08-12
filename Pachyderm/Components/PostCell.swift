@@ -10,11 +10,7 @@ import SwiftUI
 struct PostCell: View {
     @Binding var status: Mastodon.Status
 
-    /// The detail screen shows the full post. A touch on the post opens no new
-    /// screen.
     var isDetail = false
-    /// A notification row shows a small copy of the post. That copy accepts no
-    /// touch.
     var showsActions = true
 
     @Environment(MastoAPI.self) private var api
@@ -71,12 +67,9 @@ struct PostCell: View {
             }
         }
         .padding(.vertical, 6)
-        // The row uses a touch gesture. It is not in a `NavigationLink` view.
-        // The system gives a touch to the innermost view first. Thus the links
-        // in the text of the post and the buttons below it operate correctly.
         .contentShape(.rect)
         .onTapGesture {
-            guard !isDetail, showsActions else { return }
+            guard !isDetail else { return }
             navigator.open(post)
         }
         .accessibilityElement(children: .contain)

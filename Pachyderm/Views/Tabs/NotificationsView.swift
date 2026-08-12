@@ -109,15 +109,13 @@ struct NotificationRow: View {
                     }
                 }
             }
-            .buttonStyle(.plain)
-
+            
             if let status = notification.status {
                 PostCell(status: .constant(status), showsActions: false)
                     .padding(.leading, 28)
-                    .contentShape(.rect)
-                    .onTapGesture { navigator.open(status) }
             }
         }
+        .buttonStyle(.plain)
         .padding(.vertical, 6)
     }
 }
