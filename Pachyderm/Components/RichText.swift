@@ -7,8 +7,10 @@ import SwiftUI
 
 /// Shows the text of a post. The text has styles and custom emoji.
 ///
-/// The view makes one `Text` value from all the parts. Thus the text goes to the
-/// next line, the user can select it, it changes size with Dynamic Type, and the
+/// A post with no custom emoji becomes one `Text` value. A post with emoji
+/// becomes a sum of `Text` values, because only such a sum puts an image in a
+/// line of text that goes to the next line. The text thus goes to the next
+/// line, the user can select it, it changes size with Dynamic Type, and the
 /// links accept a touch. The earlier view used a `UILabel` object, and none of
 /// these functions operated. That view also gave no size. Thus it had a height
 /// of zero in a `LazyVStack` view.
@@ -16,7 +18,9 @@ struct RichText: View {
     private let content: RichContent
     private let emoji: [Mastodon.Emoji]
 
-    @State private var emojiImages: [String: Image] = [:]
+    /// Grows by one when an image arrives. The images live in a shared cache,
+    /// thus only this value tells SwiftUI to make the body again.
+    @State private var revision = 0
     @ScaledMetric(relativeTo: .body) private var emojiHeight: CGFloat = 17
     @Environment(\.displayScale) private var displayScale
 
@@ -26,6 +30,8 @@ struct RichText: View {
     }
 
     /// Reads the HTML of the post, or takes the result from the cache.
+    /// `PagedListModel` fills the cache for a whole page, thus a cell in a list
+    /// finds the result here.
     init(html: String, emoji: [Mastodon.Emoji]? = nil) {
         self.init(
             content: RichContentCache.shared.content(html: html, emoji: emoji),
@@ -39,15 +45,23 @@ struct RichText: View {
             .task(id: emojiTaskID) { await loadEmoji() }
     }
 
-    /// A sum of `Text` values. Only this construction puts an image in a line
-    /// of text that goes to the next line.
     private var composed: Text {
-        content.runs.reduce(Text(verbatim: "")) { result, run in
-            switch run {
+        // The usual case: one value, with no work on the runs and no sum.
+        guard content.hasEmoji else { return Text(content.text) }
+
+        // The read of `revision` keeps the body dependent on the load
+        // operation. The images themselves come from a shared cache, and
+        // SwiftUI does not observe that cache.
+        _ = revision
+
+        let urls = emojiURLs
+        return content.segments.reduce(Text(verbatim: "")) { result, segment in
+            switch segment {
             case .text(let attributed):
                 return result + Text(attributed)
             case .emoji(let shortcode):
-                if let image = emojiImages[shortcode] {
+                if let url = urls[shortcode],
+                   let image = EmojiImageCache.shared.image(for: url, height: emojiHeight) {
                     return result + Text(image).baselineOffset(-1)
                 }
                 // Show the shortcode until the image arrives. Do not show an
@@ -59,49 +73,36 @@ struct RichText: View {
 
     // MARK: - Emoji
 
-    /// Only the shortcodes in this post. Thus a server with 3000 custom emoji
-    /// does not cause 3000 downloads.
-    private var usedShortcodes: [String] {
-        var seen = Set<String>()
-        return content.runs.compactMap { run in
-            guard case .emoji(let shortcode) = run, seen.insert(shortcode).inserted else { return nil }
-            return shortcode
-        }
-    }
+    /// The address of each emoji in this post. A server can hold 3000 custom
+    /// emoji; only the ones in the text need an image.
+    private var emojiURLs: [String: URL] {
+        guard content.hasEmoji else { return [:] }
 
-    private var emojiTaskID: String {
-        "\(Int(emojiHeight))|\(usedShortcodes.joined(separator: ","))"
-    }
-
-    private func loadEmoji() async {
-        let wanted = usedShortcodes
-        guard !wanted.isEmpty else { return }
-
-        let urls = Dictionary(
-            emoji.filter { wanted.contains($0.shortcode) }
+        let wanted = Set(content.shortcodes)
+        return Dictionary(
+            emoji.lazy
+                .filter { wanted.contains($0.shortcode) }
                 .compactMap { item in item.imageURL.map { (item.shortcode, $0) } },
             uniquingKeysWith: { first, _ in first }
         )
-        let height = emojiHeight
-
-        for (shortcode, url) in urls where emojiImages[shortcode] == nil {
-            guard let loaded = await ImageLoader.shared.image(
-                for: url,
-                maxPixelSize: Int((height * 2 * displayScale).rounded(.up))
-            ) else { continue }
-            guard !Task.isCancelled else { return }
-            emojiImages[shortcode] = Image(uiImage: loaded.scaled(toHeight: height))
-        }
     }
-}
 
-private extension UIImage {
-    /// Sets a new scale value on the image. The image then has a height of
-    /// `height` points. The pixels do not change.
-    func scaled(toHeight height: CGFloat) -> UIImage {
-        guard size.height > 0, let cgImage else { return self }
-        let pixelHeight = CGFloat(cgImage.height)
-        return UIImage(cgImage: cgImage, scale: pixelHeight / height, orientation: imageOrientation)
+    private var emojiTaskID: String {
+        "\(Int(emojiHeight))|\(content.shortcodes.joined(separator: ","))"
+    }
+
+    private func loadEmoji() async {
+        let urls = emojiURLs
+        guard !urls.isEmpty else { return }
+
+        let height = emojiHeight
+        let scale = displayScale
+
+        for url in urls.values where EmojiImageCache.shared.image(for: url, height: height) == nil {
+            let arrived = await EmojiImageCache.shared.load(url: url, height: height, scale: scale)
+            guard !Task.isCancelled else { return }
+            if arrived { revision &+= 1 }
+        }
     }
 }
 

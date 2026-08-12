@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXFileReference section */
+		D6DBDC9B302D0E2B0064C8B5 /* PachydermTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PachydermTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		E17721FC2DFB0512005571F6 /* Pachyderm.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Pachyderm.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -21,6 +22,11 @@
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
+		D6DBDC9C302D0E2B0064C8B5 /* PachydermTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = PachydermTests;
+			sourceTree = "<group>";
+		};
 		E17721FE2DFB0512005571F6 /* Pachyderm */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
@@ -32,6 +38,13 @@
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		D6DBDC98302D0E2B0064C8B5 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		E17721F92DFB0512005571F6 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -46,6 +59,7 @@
 			isa = PBXGroup;
 			children = (
 				E17721FE2DFB0512005571F6 /* Pachyderm */,
+				D6DBDC9C302D0E2B0064C8B5 /* PachydermTests */,
 				E17721FD2DFB0512005571F6 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -54,6 +68,7 @@
 			isa = PBXGroup;
 			children = (
 				E17721FC2DFB0512005571F6 /* Pachyderm.app */,
+				D6DBDC9B302D0E2B0064C8B5 /* PachydermTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -61,6 +76,28 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		D6DBDC9A302D0E2B0064C8B5 /* PachydermTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = D6DBDC9F302D0E2B0064C8B5 /* Build configuration list for PBXNativeTarget "PachydermTests" */;
+			buildPhases = (
+				D6DBDC97302D0E2B0064C8B5 /* Sources */,
+				D6DBDC98302D0E2B0064C8B5 /* Frameworks */,
+				D6DBDC99302D0E2B0064C8B5 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				D6DBDC9C302D0E2B0064C8B5 /* PachydermTests */,
+			);
+			name = PachydermTests;
+			packageProductDependencies = (
+			);
+			productName = PachydermTests;
+			productReference = D6DBDC9B302D0E2B0064C8B5 /* PachydermTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 		E17721FB2DFB0512005571F6 /* Pachyderm */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = E17722072DFB051C005571F6 /* Build configuration list for PBXNativeTarget "Pachyderm" */;
@@ -88,9 +125,12 @@
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
-				LastSwiftUpdateCheck = 2600;
+				LastSwiftUpdateCheck = 2700;
 				LastUpgradeCheck = 2700;
 				TargetAttributes = {
+					D6DBDC9A302D0E2B0064C8B5 = {
+						CreatedOnToolsVersion = 27.0;
+					};
 					E17721FB2DFB0512005571F6 = {
 						CreatedOnToolsVersion = 26.0;
 					};
@@ -111,11 +151,19 @@
 			projectRoot = "";
 			targets = (
 				E17721FB2DFB0512005571F6 /* Pachyderm */,
+				D6DBDC9A302D0E2B0064C8B5 /* PachydermTests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+		D6DBDC99302D0E2B0064C8B5 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		E17721FA2DFB0512005571F6 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -126,6 +174,13 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		D6DBDC97302D0E2B0064C8B5 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		E17721F82DFB0512005571F6 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -136,6 +191,60 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin XCBuildConfiguration section */
+		D6DBDCA0302D0E2B0064C8B5 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				MACOSX_DEPLOYMENT_TARGET = 27.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = ca.bomberfish.PachydermTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = auto;
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Pachyderm.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Pachyderm";
+				XROS_DEPLOYMENT_TARGET = 27.0;
+			};
+			name = Debug;
+		};
+		D6DBDCA1302D0E2B0064C8B5 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				MACOSX_DEPLOYMENT_TARGET = 27.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = ca.bomberfish.PachydermTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = auto;
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Pachyderm.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Pachyderm";
+				XROS_DEPLOYMENT_TARGET = 27.0;
+			};
+			name = Release;
+		};
 		E17722052DFB051C005571F6 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -363,6 +472,15 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		D6DBDC9F302D0E2B0064C8B5 /* Build configuration list for PBXNativeTarget "PachydermTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				D6DBDCA0302D0E2B0064C8B5 /* Debug */,
+				D6DBDCA1302D0E2B0064C8B5 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		E17721F72DFB0512005571F6 /* Build configuration list for PBXProject "Pachyderm" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (

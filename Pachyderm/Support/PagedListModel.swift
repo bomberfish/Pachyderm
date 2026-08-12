@@ -19,7 +19,7 @@ import os
 /// it.
 @MainActor
 @Observable
-final class PagedListModel<Item: Identifiable & Sendable> where Item.ID == String {
+final class PagedListModel<Item: Identifiable & Sendable & RichContentSource> where Item.ID == String {
     /// Gets one page. The `olderThan` value is the id of the last item on the
     /// screen. It is nil for the first page. The closure is `@MainActor`,
     /// because it holds the client.
@@ -101,7 +101,7 @@ final class PagedListModel<Item: Identifiable & Sendable> where Item.ID == Strin
             do {
                 let page = try await self.source(last.id)
                 guard !Task.isCancelled else { return }
-                self.append(page)
+                await self.append(page)
             } catch is CancellationError {
                 // The user scrolled away. Report nothing.
             } catch {
@@ -127,7 +127,7 @@ final class PagedListModel<Item: Identifiable & Sendable> where Item.ID == Strin
             guard !Task.isCancelled else { return }
             items = []
             seenIDs = []
-            append(page)
+            await append(page)
             phase = .loaded
         } catch is CancellationError {
             // A newer load operation replaced this one. That operation sets
@@ -143,8 +143,14 @@ final class PagedListModel<Item: Identifiable & Sendable> where Item.ID == Strin
     /// Two pages contain the same item when a person makes a post during the
     /// scroll movement. Two equal ids in a `ForEach` view make SwiftUI remove
     /// rows and write warnings.
-    private func append(_ page: [Item]) {
+    ///
+    /// The HTML of the whole page becomes rich text before the items reach the
+    /// screen. That work happens off the main actor, thus a row does not read
+    /// its own HTML during the first layout pass.
+    private func append(_ page: [Item]) async {
         let fresh = page.filter { seenIDs.insert($0.id).inserted }
+        await RichContentCache.shared.warm(fresh.flatMap(\.richContentPieces))
+        guard !Task.isCancelled else { return }
         items.append(contentsOf: fresh)
         hasMore = page.count >= pageSize
     }

@@ -5,29 +5,67 @@
 
 import Foundation
 
-/// The text of a post in parts. SwiftUI can show each part directly.
+/// The text of a post with its styles and its custom emoji.
 ///
-/// A custom emoji becomes a separate part. Thus the view can put an image
-/// between two parts of text.
+/// A custom emoji is one placeholder character inside `text`. That character
+/// holds the shortcode in the `customEmoji` attribute. Thus the whole post is
+/// one `AttributedString` value. A view can show it in one step, a screen
+/// reader gets `plainText`, and an editor can change it and keep the emoji in
+/// place.
 nonisolated struct RichContent: Hashable, Sendable {
-    enum Run: Hashable, Sendable {
+    /// The character that stands for a custom emoji. Unicode calls it OBJECT
+    /// REPLACEMENT CHARACTER. It is the character that a text engine uses for
+    /// content from outside the text.
+    static let emojiPlaceholder: Character = "\u{FFFC}"
+
+    var text: AttributedString
+    /// The text with no style. A custom emoji keeps its `:shortcode:` form.
+    /// Use it for a screen reader, for a preview and for a copy operation.
+    var plainText: String
+    /// Each shortcode in the text, in order of first appearance, with no
+    /// repeat.
+    var shortcodes: [String]
+
+    /// True when the text holds a custom emoji. A view reads this value first:
+    /// a post with no emoji needs no work with the runs.
+    var hasEmoji: Bool { !shortcodes.isEmpty }
+
+    var isEmpty: Bool { plainText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+
+    static let empty = RichContent(text: AttributedString(), plainText: "", shortcodes: [])
+}
+
+// MARK: - Segments
+
+nonisolated extension RichContent {
+    /// One piece of the text for a view.
+    enum Segment: Hashable, Sendable {
         case text(AttributedString)
         /// A custom emoji. The value is the shortcode without the two colons.
         case emoji(String)
     }
 
-    var runs: [Run]
-    /// The text with no style. Use it for a screen reader and for a preview.
-    var plainText: String
-
-    var isEmpty: Bool { plainText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-
-    static let empty = RichContent(runs: [], plainText: "")
+    /// Divides the text at each custom emoji.
+    ///
+    /// `AttributedString.Runs` gives the ranges of one attribute directly,
+    /// thus the parser needs no second copy of the text. Call this only when
+    /// `hasEmoji` is true.
+    var segments: [Segment] {
+        var result: [Segment] = []
+        for (shortcode, range) in text.runs[\.customEmoji] {
+            if let shortcode {
+                result.append(.emoji(shortcode))
+            } else {
+                result.append(.text(AttributedString(text[range])))
+            }
+        }
+        return result
+    }
 }
 
 // MARK: - Parser
 
-extension RichContent {
+nonisolated extension RichContent {
     /// Reads the small group of HTML tags that Mastodon sends.
     ///
     /// This function replaces
@@ -37,7 +75,7 @@ extension RichContent {
     /// defined result. When it operates, it also stops the scroll movement.
     ///
     /// - Parameter knownEmoji: The shortcodes for this post from the server.
-    ///   The function makes a separate part for only these shortcodes. Other
+    ///   The function makes a placeholder for only these shortcodes. Other
     ///   text between two colons does not change.
     static func parse(html: String, knownEmoji: Set<String> = []) -> RichContent {
         guard !html.isEmpty else { return .empty }
@@ -45,13 +83,25 @@ extension RichContent {
         return parser.parse()
     }
 
-    private struct Parser {
-        let html: String
-        let knownEmoji: Set<String>
+    private nonisolated struct Parser {
+        /// The reader walks over UTF-8 bytes, not over characters. A step with
+        /// `String.Index` needs grapheme work at each position. The markup
+        /// characters `<`, `>`, `&` and `/` are all ASCII, and UTF-8 puts no
+        /// ASCII byte inside a longer character. Thus a byte walk finds the
+        /// same positions and never divides a character.
+        private let bytes: [UInt8]
+        private let knownEmoji: Set<String>
 
-        private var runs: [Run] = []
-        private var current = AttributedString()
+        private var text = AttributedString()
         private var plain = ""
+        private var shortcodes: [String] = []
+        private var seenShortcodes = Set<String>()
+
+        /// Text that waits for its attributes. The parser holds it until the
+        /// style changes. Thus `<p>one <b>two</b> three</p>` needs three
+        /// `AttributedString` values, not one for each piece between two tags.
+        private var pending = ""
+        private var pendingStyle = Style()
 
         // Each style has a counter, not a flag. In
         // `<strong><strong>x</strong>y</strong>` the letter `y` must stay bold.
@@ -65,49 +115,74 @@ extension RichContent {
 
         private enum SpanKind { case plain, invisible, ellipsis }
 
+        /// The style of one piece of text. `AttributeContainer` needs an
+        /// allocation for each value, thus the parser compares this small
+        /// value instead and makes a container only at the end of a piece.
+        private struct Style: Equatable {
+            var intent: InlinePresentationIntent = []
+            var link: URL?
+        }
+
         init(html: String, knownEmoji: Set<String>) {
-            self.html = html
+            self.bytes = Array(html.utf8)
             self.knownEmoji = knownEmoji
         }
 
         mutating func parse() -> RichContent {
-            var index = html.startIndex
-            var textStart = index
+            let count = bytes.count
+            var index = 0
+            var textStart = 0
 
-            while index < html.endIndex {
-                if html[index] == "<" {
-                    append(text: String(html[textStart..<index]))
-                    guard let close = html[index...].firstIndex(of: ">") else {
-                        // The tag has no end character. Use the remainder as
-                        // text.
-                        textStart = index
-                        break
-                    }
-                    handle(tag: String(html[html.index(after: index)..<close]))
-                    index = html.index(after: close)
-                    textStart = index
-                } else {
-                    index = html.index(after: index)
+            while index < count {
+                guard bytes[index] == Self.lessThan else {
+                    index += 1
+                    continue
                 }
+                append(textFrom: textStart, to: index)
+                guard let close = indexOfTagEnd(after: index) else {
+                    // The tag has no end character. Use the remainder as text.
+                    textStart = index
+                    break
+                }
+                handle(tagFrom: index + 1, to: close)
+                index = close + 1
+                textStart = index
             }
-            append(text: String(html[textStart..<html.endIndex]))
+            append(textFrom: textStart, to: count)
 
-            flush()
+            flushPending()
             trimTrailingWhitespace()
-            return RichContent(runs: runs, plainText: plain.trimmingCharacters(in: .whitespacesAndNewlines))
+            return RichContent(
+                text: text,
+                plainText: plain.trimmingCharacters(in: .whitespacesAndNewlines),
+                shortcodes: shortcodes
+            )
+        }
+
+        private func indexOfTagEnd(after start: Int) -> Int? {
+            var cursor = start + 1
+            while cursor < bytes.count {
+                if bytes[cursor] == Self.greaterThan { return cursor }
+                cursor += 1
+            }
+            return nil
         }
 
         // MARK: Tags
 
-        private mutating func handle(tag raw: String) {
-            let body = raw.trimmingCharacters(in: .whitespaces)
-            guard !body.isEmpty, !body.hasPrefix("!") else { return }
+        private mutating func handle(tagFrom start: Int, to end: Int) {
+            var cursor = start
+            while cursor < end, Self.isTagSpace(bytes[cursor]) { cursor += 1 }
+            guard cursor < end else { return }
+            // `<!-- a comment -->` and `<!DOCTYPE …>` hold no text.
+            guard bytes[cursor] != Self.exclamation else { return }
 
-            let isClosing = body.hasPrefix("/")
-            let name = String(
-                body.drop(while: { $0 == "/" })
-                    .prefix(while: { !$0.isWhitespace && $0 != "/" && $0 != ">" })
-            ).lowercased()
+            let isClosing = bytes[cursor] == Self.slash
+            while cursor < end, bytes[cursor] == Self.slash { cursor += 1 }
+
+            let nameStart = cursor
+            while cursor < end, !Self.isNameEnd(bytes[cursor]) { cursor += 1 }
+            let name = Self.lowercasedName(bytes[nameStart..<cursor])
 
             switch name {
             case "br":
@@ -127,16 +202,13 @@ extension RichContent {
             case "a":
                 if isClosing {
                     if !links.isEmpty { links.removeLast() }
-                } else if let href = Self.attribute("href", in: body),
-                          let url = URL(string: Self.decodeEntities(href)) {
-                    links.append(url)
                 } else {
-                    // Add an item also for a bad `href` value. The stack must
-                    // keep one item for each `<a>` tag.
-                    links.append(URL(string: "about:blank")!)
+                    // Only these two tags need their attributes. The tag of a
+                    // paragraph or of a style thus needs no text value at all.
+                    openLink(body: Self.string(bytes[start..<end]))
                 }
             case "span":
-                handleSpan(body: body, isClosing: isClosing)
+                handleSpan(from: start, to: end, isClosing: isClosing)
             default:
                 break
             }
@@ -147,11 +219,22 @@ extension RichContent {
             code = max(0, code)
         }
 
+        private mutating func openLink(body: String) {
+            if let href = Self.attribute("href", in: body),
+               let url = URL(string: Self.decodeEntities(href)) {
+                links.append(url)
+            } else {
+                // Add an item also for a bad `href` value. The stack must keep
+                // one item for each `<a>` tag.
+                links.append(Self.blankLink)
+            }
+        }
+
         /// Mastodon makes a long link shorter with three `span` elements:
         /// `<span class="invisible">https://</span><span class="ellipsis">example.com/a</span><span class="invisible">/long/path</span>`
         /// The parser removes the hidden parts. It puts three dots at the end
         /// of the short text.
-        private mutating func handleSpan(body: String, isClosing: Bool) {
+        private mutating func handleSpan(from start: Int, to end: Int, isClosing: Bool) {
             if isClosing {
                 guard let kind = spans.popLast() else { return }
                 switch kind {
@@ -163,7 +246,7 @@ extension RichContent {
                 return
             }
 
-            let classes = Self.attribute("class", in: body) ?? ""
+            let classes = Self.attribute("class", in: Self.string(bytes[start..<end])) ?? ""
             if classes.contains("invisible") {
                 spans.append(.invisible)
                 invisibleDepth += 1
@@ -176,71 +259,137 @@ extension RichContent {
 
         // MARK: Text
 
-        private mutating func append(text raw: String) {
-            guard !raw.isEmpty else { return }
-            appendRaw(Self.decodeEntities(raw))
+        private mutating func append(textFrom start: Int, to end: Int) {
+            guard start < end else { return }
+            let slice = bytes[start..<end]
+            let value = Self.string(slice)
+            // The search for `&` reads bytes. The alternative reads characters
+            // of a value that holds no entity in almost every case.
+            appendRaw(slice.contains(Self.ampersand) ? Self.decodeEntities(value) : value)
         }
 
-        private mutating func appendRaw(_ text: String) {
-            guard !text.isEmpty, invisibleDepth == 0 else { return }
+        private mutating func appendRaw(_ value: String) {
+            guard !value.isEmpty, invisibleDepth == 0 else { return }
 
             guard !knownEmoji.isEmpty else {
-                appendStyled(text)
+                appendStyled(value)
                 return
             }
-            for piece in Self.split(text, shortcodes: knownEmoji) {
+            for piece in Self.split(value, shortcodes: knownEmoji) {
                 switch piece {
-                case .text(let value):
-                    appendStyled(value)
+                case .text(let text):
+                    appendStyled(text)
                 case .emoji(let shortcode):
-                    flush()
-                    runs.append(.emoji(shortcode))
-                    plain += ":\(shortcode):"
+                    appendEmoji(shortcode)
                 }
             }
         }
 
-        private mutating func appendStyled(_ text: String) {
-            guard !text.isEmpty else { return }
-            var piece = AttributedString(text)
-            piece.mergeAttributes(attributes)
-            current.append(piece)
-            plain += text
+        private mutating func appendStyled(_ value: String) {
+            guard !value.isEmpty else { return }
+
+            let style = currentStyle
+            if pending.isEmpty {
+                pendingStyle = style
+            } else if style != pendingStyle {
+                flushPending()
+                pendingStyle = style
+            }
+            pending += value
+            plain += value
         }
 
-        private var attributes: AttributeContainer {
-            var container = AttributeContainer()
+        private mutating func appendEmoji(_ shortcode: String) {
+            flushPending()
+
+            var piece = AttributedString(String(RichContent.emojiPlaceholder))
+            // The placeholder keeps the style around it. An emoji inside a
+            // link thus opens that link, and text written next to the emoji
+            // later keeps the style of its neighbour.
+            piece.mergeAttributes(Self.container(for: currentStyle))
+            piece.customEmoji = shortcode
+            text.append(piece)
+
+            plain += ":\(shortcode):"
+            if seenShortcodes.insert(shortcode).inserted { shortcodes.append(shortcode) }
+        }
+
+        private var currentStyle: Style {
             var intent: InlinePresentationIntent = []
             if bold > 0 { intent.insert(.stronglyEmphasized) }
             if italic > 0 { intent.insert(.emphasized) }
             if strikethrough > 0 { intent.insert(.strikethrough) }
             if code > 0 { intent.insert(.code) }
-            if !intent.isEmpty { container.inlinePresentationIntent = intent }
-            if let link = links.last, link.scheme != "about" { container.link = link }
+
+            let link = links.last.flatMap { $0.scheme == "about" ? nil : $0 }
+            return Style(intent: intent, link: link)
+        }
+
+        private static func container(for style: Style) -> AttributeContainer {
+            var container = AttributeContainer()
+            if !style.intent.isEmpty { container.inlinePresentationIntent = style.intent }
+            if let link = style.link { container.link = link }
             return container
         }
 
-        private mutating func flush() {
-            guard !current.characters.isEmpty else { return }
-            runs.append(.text(current))
-            current = AttributedString()
+        private mutating func flushPending() {
+            guard !pending.isEmpty else { return }
+            var piece = AttributedString(pending)
+            piece.mergeAttributes(Self.container(for: pendingStyle))
+            text.append(piece)
+            pending = ""
         }
 
         /// Removes the empty line at the end. Each `</p>` tag makes one.
+        ///
+        /// The walk goes backwards over the characters and stops at the first
+        /// character that is not whitespace. The placeholder of an emoji is
+        /// not whitespace, thus the walk stops there.
         private mutating func trimTrailingWhitespace() {
-            while case .text(var last)? = runs.last {
-                guard let range = last.range(of: "\\s+$", options: .regularExpression) else { return }
-                last.removeSubrange(range)
-                if last.characters.isEmpty {
-                    runs.removeLast()
-                } else {
-                    runs[runs.count - 1] = .text(last)
-                    return
-                }
+            let characters = text.characters
+            var end = characters.endIndex
+            while end > characters.startIndex {
+                let previous = characters.index(before: end)
+                guard characters[previous].isWhitespace else { break }
+                end = previous
             }
+            guard end < characters.endIndex else { return }
+            text.removeSubrange(end..<text.endIndex)
         }
 
         // MARK: Static helpers
+
+        private static let lessThan = UInt8(ascii: "<")
+        private static let greaterThan = UInt8(ascii: ">")
+        private static let ampersand = UInt8(ascii: "&")
+        private static let slash = UInt8(ascii: "/")
+        private static let exclamation = UInt8(ascii: "!")
+        private static let blankLink = URL(string: "about:blank")!
+
+        /// A space at the start of a tag. The name of a tag ends at one of
+        /// these, at a slash, or at the end of the tag.
+        private static func isTagSpace(_ byte: UInt8) -> Bool {
+            byte == 0x20 || byte == 0x09
+        }
+
+        private static func isNameEnd(_ byte: UInt8) -> Bool {
+            byte == 0x20 || byte == 0x09 || byte == 0x0A || byte == 0x0D || byte == slash
+        }
+
+        private static func string(_ slice: ArraySlice<UInt8>) -> String {
+            String(decoding: slice, as: UTF8.self)
+        }
+
+        /// The name of a tag with no capital letter. HTML compares a tag name
+        /// with the rules of ASCII, thus this function changes only A to Z.
+        private static func lowercasedName(_ slice: ArraySlice<UInt8>) -> String {
+            var name = [UInt8]()
+            name.reserveCapacity(slice.count)
+            for byte in slice {
+                name.append(byte >= 0x41 && byte <= 0x5A ? byte + 0x20 : byte)
+            }
+            return String(decoding: name, as: UTF8.self)
+        }
 
         private enum Piece {
             case text(String)
@@ -336,6 +485,56 @@ extension RichContent {
     }
 }
 
+// MARK: - Ingest
+
+/// One piece of text that needs the HTML reader, with the emoji that belong to
+/// it.
+nonisolated struct RichContentPiece: Hashable, Sendable {
+    let html: String
+    let shortcodes: Set<String>
+
+    init(html: String, emoji: [Mastodon.Emoji]?) {
+        self.html = html
+        self.shortcodes = Set((emoji ?? []).map(\.shortcode))
+    }
+}
+
+/// An item of a list whose text needs the HTML reader.
+///
+/// `PagedListModel` reads every piece of a page before the rows appear. The
+/// parser thus operates once, away from the main actor, and not inside `body`
+/// during a scroll movement.
+nonisolated protocol RichContentSource {
+    var richContentPieces: [RichContentPiece] { get }
+}
+
+nonisolated extension Mastodon.Status: RichContentSource {
+    var richContentPieces: [RichContentPiece] {
+        let post = displayed
+        var pieces = [
+            RichContentPiece(html: post.html, emoji: post.emojis),
+            RichContentPiece(html: post.account.bestDisplayName, emoji: post.account.emojis),
+        ]
+        if let booster = boostedBy {
+            pieces.append(RichContentPiece(html: booster.bestDisplayName, emoji: booster.emojis))
+        }
+        return pieces
+    }
+}
+
+nonisolated extension Mastodon.Notification: RichContentSource {
+    var richContentPieces: [RichContentPiece] {
+        [RichContentPiece(html: account.bestDisplayName, emoji: account.emojis)]
+            + (status?.richContentPieces ?? [])
+    }
+}
+
+nonisolated extension Mastodon.Conversation: RichContentSource {
+    var richContentPieces: [RichContentPiece] {
+        lastStatus?.richContentPieces ?? []
+    }
+}
+
 // MARK: - Cache
 
 /// Keeps the result for the text of each post.
@@ -347,20 +546,62 @@ extension RichContent {
 final class RichContentCache {
     static let shared = RichContentCache()
 
-    private let cache = NSCache<NSString, Entry>()
+    private let cache = NSCache<Key, Entry>()
 
     private init() {
         cache.countLimit = 600
     }
 
     func content(html: String, emoji: [Mastodon.Emoji]?) -> RichContent {
-        let shortcodes = Set((emoji ?? []).map(\.shortcode))
-        let key = "\(shortcodes.sorted().joined(separator: ","))|\(html)" as NSString
+        content(for: RichContentPiece(html: html, emoji: emoji))
+    }
 
+    func content(for piece: RichContentPiece) -> RichContent {
+        let key = Key(piece)
         if let hit = cache.object(forKey: key) { return hit.content }
-        let parsed = RichContent.parse(html: html, knownEmoji: shortcodes)
+
+        let parsed = RichContent.parse(html: piece.html, knownEmoji: piece.shortcodes)
         cache.setObject(Entry(parsed), forKey: key)
         return parsed
+    }
+
+    /// Reads a whole page away from the main actor and keeps each result.
+    ///
+    /// One task reads the pieces one after the other. A page holds many short
+    /// values, thus a task for each one would cost more than the work itself.
+    /// The important part is that no piece is read on the main actor.
+    func warm(_ pieces: [RichContentPiece]) async {
+        var wanted: [RichContentPiece] = []
+        var seen = Set<RichContentPiece>()
+        for piece in pieces where !piece.html.isEmpty {
+            guard seen.insert(piece).inserted, cache.object(forKey: Key(piece)) == nil else { continue }
+            wanted.append(piece)
+        }
+        guard !wanted.isEmpty else { return }
+
+        let parsed = await Task.detached(priority: .userInitiated) {
+            wanted.map { ($0, RichContent.parse(html: $0.html, knownEmoji: $0.shortcodes)) }
+        }.value
+
+        for (piece, content) in parsed {
+            cache.setObject(Entry(content), forKey: Key(piece))
+        }
+    }
+
+    /// `NSCache` needs a key of a class type. This one holds the parts of the
+    /// piece, thus a lookup needs no new text value for each cell.
+    private nonisolated final class Key: NSObject {
+        let piece: RichContentPiece
+
+        init(_ piece: RichContentPiece) {
+            self.piece = piece
+        }
+
+        override var hash: Int { piece.hashValue }
+
+        override func isEqual(_ object: Any?) -> Bool {
+            (object as? Key).map { $0.piece == piece } ?? false
+        }
     }
 
     private final class Entry {
