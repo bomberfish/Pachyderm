@@ -169,13 +169,16 @@ extension Mastodon.Notification {
 extension View {
     /// Puts each value that a view of the app reads into the environment.
     func previewEnvironment() -> some View {
-        MastodonNavigationStack {
-            self
-        }
-        .environment(MastoAPI(credentials: MastodonCredentials(
+        let api = MastoAPI(credentials: MastodonCredentials(
             host: "mastodon.example",
             accessToken: "preview"
-        )))
+        ))
+        return MastodonNavigationStack {
+            self
+        }
+        .environment(api)
         .environment(ErrorPresenter())
+        // A preview never calls `start()`, thus this center opens no socket.
+        .environment(StreamingCenter(api: api))
     }
 }

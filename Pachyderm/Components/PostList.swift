@@ -17,6 +17,8 @@ struct PostList<Header: View>: View {
     let model: PagedListModel<Mastodon.Status>
     private let header: Header
 
+    @State private var position = ScrollPosition()
+
     init(model: PagedListModel<Mastodon.Status>, @ViewBuilder header: () -> Header) {
         self.model = model
         self.header = header()
@@ -38,10 +40,18 @@ struct PostList<Header: View>: View {
                 footer
             }
         }
+        .scrollPosition($position)
         .scrollDismissesKeyboard(.immediately)
         .refreshable { await model.refresh() }
         .task { model.loadIfNeeded() }
         .overlay { placeholder }
+        .newItemsPill(
+            count: model.pendingCount,
+            title: "^[\(model.pendingCount) new post](inflect: true)"
+        ) {
+            withAnimation { model.flushPending() }
+            position.scrollTo(edge: .top)
+        }
     }
 
     @ViewBuilder

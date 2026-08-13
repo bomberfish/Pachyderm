@@ -13,8 +13,12 @@ import SwiftUI
 struct MessagesView: View {
     @Environment(MastoAPI.self) private var api
     @Environment(Navigator.self) private var navigator
+    @Environment(StreamingCenter.self) private var streaming
 
     @State private var model: PagedListModel<Mastodon.Conversation>?
+    @State private var position = ScrollPosition()
+
+    private static let handlerID = "MessagesView"
 
     var body: some View {
         Group {
@@ -31,6 +35,17 @@ struct MessagesView: View {
                 model = PagedListModel { olderThan in
                     try await api.conversations(olderThan: olderThan)
                 }
+            }
+
+            guard let model, api.supportsStreaming else { return }
+            streaming.addHandler(Self.handlerID, onReconnect: { await model.refresh() }) { event in
+                guard case .conversation(let conversation) = event else { return }
+                // A reply moves a conversation that the list already holds, and
+                // it marks it unread. The replacement handles that one, and the
+                // buffer takes the conversations that are new. Each call ignores
+                // the case of the other.
+                model.replace(conversation)
+                await model.receive(conversation)
             }
         }
     }
@@ -58,8 +73,16 @@ struct MessagesView: View {
                 }
             }
         }
+        .scrollPosition($position)
         .refreshable { await model.refresh() }
         .task { model.loadIfNeeded() }
+        .newItemsPill(
+            count: model.pendingCount,
+            title: "^[\(model.pendingCount) new message](inflect: true)"
+        ) {
+            withAnimation { model.flushPending() }
+            position.scrollTo(edge: .top)
+        }
         .overlay {
             if model.isEmpty {
                 switch model.phase {

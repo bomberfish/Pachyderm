@@ -36,6 +36,16 @@ final class PagedListModel<Item: Identifiable & Sendable & RichContentSource> wh
     /// binding to each row. A favourite operation or a boost operation then
     /// changes only that row. The list does not load again.
     var items: [Item] = []
+
+    /// The items that arrived from the stream and wait for the reader.
+    ///
+    /// A streamed item must not go straight into `items`. The list is a
+    /// `LazyVStack` view inside a `ScrollView` view, thus an insertion at the
+    /// top moves each row below it. The text under the thumb of a reader would
+    /// change while they read it. The count goes onto a button instead, and the
+    /// reader chooses the moment.
+    private(set) var pending: [Item] = []
+
     private(set) var phase: Phase = .idle
     private(set) var isLoadingMore = false
     /// False after the server sends a page with less items than the page size.
@@ -54,12 +64,15 @@ final class PagedListModel<Item: Identifiable & Sendable & RichContentSource> wh
 
     var isEmpty: Bool { items.isEmpty }
 
+    var pendingCount: Int { pending.count }
+
     /// Changes the feed and loads it. An example is a change from Home to
     /// Federated.
     func replaceSource(_ source: @escaping Source) {
         self.source = source
         task?.cancel()
         items = []
+        pending = []
         seenIDs = []
         hasMore = true
         phase = .idle
@@ -114,9 +127,59 @@ final class PagedListModel<Item: Identifiable & Sendable & RichContentSource> wh
     }
 
     /// Puts a new item at the top. A new post of the user is an example.
+    ///
+    /// The item goes onto the screen at once. It does not go into `pending`,
+    /// because the reader made this item and expects to see it.
     func prepend(_ item: Item) {
         guard seenIDs.insert(item.id).inserted else { return }
         items.insert(item, at: 0)
+    }
+
+    // MARK: - Live updates
+
+    /// Takes one item from the stream into the buffer.
+    ///
+    /// The id enters `seenIDs` at the flush operation and not here. A page from
+    /// `loadMore` can hold the same item, and the buffer must not hide it.
+    func receive(_ item: Item) async {
+        guard !holds(item.id) else { return }
+        // Make the rich text before the row reaches the screen, as a page does.
+        await RichContentCache.shared.warm(item.richContentPieces)
+        guard !Task.isCancelled, !holds(item.id) else { return }
+        pending.append(item)
+    }
+
+    /// Moves the buffer onto the screen, newest first.
+    func flushPending() {
+        guard !pending.isEmpty else { return }
+        let fresh = pending.filter { seenIDs.insert($0.id).inserted }
+        pending = []
+        items.insert(contentsOf: fresh.reversed(), at: 0)
+    }
+
+    /// Takes an item off the screen. A `delete` event calls it.
+    func remove(id: String) {
+        items.removeAll { $0.id == id }
+        pending.removeAll { $0.id == id }
+        seenIDs.remove(id)
+    }
+
+    /// Exchanges one item in place. An edit of a post calls it.
+    ///
+    /// The function does nothing when the item is on neither list. An edit of an
+    /// item that the reader never had is not news, and an insertion of it here
+    /// would put it in the wrong place in the order.
+    func replace(_ item: Item) {
+        if let index = items.firstIndex(where: { $0.id == item.id }) {
+            items[index] = item
+        } else if let index = pending.firstIndex(where: { $0.id == item.id }) {
+            pending[index] = item
+        }
+    }
+
+    /// True when the item is on the screen or in the buffer.
+    private func holds(_ id: String) -> Bool {
+        seenIDs.contains(id) || pending.contains { $0.id == id }
     }
 
     // MARK: - Private
@@ -126,6 +189,9 @@ final class PagedListModel<Item: Identifiable & Sendable & RichContentSource> wh
             let page = try await source(nil)
             guard !Task.isCancelled else { return }
             items = []
+            // This page holds each item that the buffer held, and it holds them
+            // in the correct order.
+            pending = []
             seenIDs = []
             await append(page)
             phase = .loaded

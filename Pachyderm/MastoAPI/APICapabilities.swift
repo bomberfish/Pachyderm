@@ -475,6 +475,20 @@ extension APICapabilityRequirements {
     static let bubbleTimeline: Self =
         [.akkoma: .assumeAvailable] | .features(.bubbleTimeline)
 
+    /// `/api/v1/streaming` over a WebSocket. Mastodon has had it since the
+    /// first version with an `/api/v1` path.
+    static let streaming: Self =
+        .mastodonForks("2.0.0")
+        | [
+            .pleroma: .assumeAvailable,
+            .akkoma: .assumeAvailable,
+            .gotosocial: "0.16.0",
+            .iceshrimp: .assumeAvailable,
+            .sharkey: .assumeAvailable,
+            .hollo: .assumeAvailable,
+        ]
+        | .features(.streaming)
+
     /// `/api/v1/conversations`. The Messages tab uses this endpoint.
     static let directConversations: Self =
         .mastodonForks("2.6.0")

@@ -10,8 +10,12 @@ import SwiftUI
 /// The notifications tab.
 struct NotificationsView: View {
     @Environment(MastoAPI.self) private var api
+    @Environment(StreamingCenter.self) private var streaming
 
     @State private var model: PagedListModel<Mastodon.Notification>?
+    @State private var position = ScrollPosition()
+
+    private static let handlerID = "NotificationsView"
 
     var body: some View {
         Group {
@@ -28,6 +32,14 @@ struct NotificationsView: View {
                 model = PagedListModel { olderThan in
                     try await api.notifications(olderThan: olderThan)
                 }
+            }
+
+            // The `user` channel carries the notifications too, thus this screen
+            // needs no socket of its own.
+            guard let model, api.supportsStreaming else { return }
+            streaming.addHandler(Self.handlerID, onReconnect: { await model.refresh() }) { event in
+                guard case .notification(let notification) = event else { return }
+                await model.receive(notification)
             }
         }
     }
@@ -49,8 +61,16 @@ struct NotificationsView: View {
                 }
             }
         }
+        .scrollPosition($position)
         .refreshable { await model.refresh() }
         .task { model.loadIfNeeded() }
+        .newItemsPill(
+            count: model.pendingCount,
+            title: "^[\(model.pendingCount) new notification](inflect: true)"
+        ) {
+            withAnimation { model.flushPending() }
+            position.scrollTo(edge: .top)
+        }
         .overlay {
             if model.isEmpty {
                 switch model.phase {

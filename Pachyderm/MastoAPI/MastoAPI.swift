@@ -229,6 +229,20 @@ final class MastoAPI {
         return try await http.getPublic(url: href)
     }
 
+    // MARK: - Streaming
+
+    /// The `wss://` address from `/api/v1/instance`. It is nil until that
+    /// request lands, and `MastodonStreaming` then uses the standard path.
+    var streamingEndpoint: URL? { instance?.urls?.streamingURL }
+
+    func streaming() -> MastodonStreaming {
+        MastodonStreaming(credentials: credentials, endpoint: streamingEndpoint)
+    }
+
+    /// The tolerant test. An unknown fork gets one attempt. A timeline that
+    /// never updates on its own is worse than one line in the log.
+    var supportsStreaming: Bool { supportsOrUnknown(.streaming) }
+
     // MARK: - Capabilities
 
     /// Refreshes `instance` and `capabilities` for the current host.
