@@ -153,6 +153,29 @@ final class MastoAPI {
         return try await http.get("v1/notifications/unread_count");
     }
 
+    /// Deletes one notification from the server.
+    func dismissNotification(id: String) async throws {
+        try requireAuthentication()
+        try await http.requestData("v1/notifications/\(id)/dismiss", method: .post)
+    }
+
+    /// Deletes every notification of the user from the server.
+    func clearNotifications() async throws {
+        try requireAuthentication()
+        try await http.requestData("v1/notifications/clear", method: .post)
+    }
+
+    /// Moves the read marker. Mastodon has no per-notification read flag; a
+    /// single marker id divides read notifications from unread ones.
+    func markNotificationsAsRead(upTo id: String) async throws {
+        try requireAuthentication()
+        try await http.requestData(
+            "v1/markers",
+            method: .post,
+            json: MarkerUpdate(notifications: .init(lastReadId: id))
+        )
+    }
+
     func conversations(olderThan: String? = nil, limit: Int = 40) async throws -> [Mastodon.Conversation] {
         try requireAuthentication()
         var query = ["limit": String(limit)]
@@ -381,3 +404,9 @@ private nonisolated struct NewStatus: Encodable {
     var spoilerText: String?
     var inReplyToId: String?
 }
+/// The body of a `POST /api/v1/markers` request.
+private nonisolated struct MarkerUpdate: Encodable {
+    struct Marker: Encodable { var lastReadId: String }
+    var notifications: Marker
+}
+

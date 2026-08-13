@@ -11,9 +11,13 @@ import SwiftUI
 struct NotificationsView: View {
     @Environment(MastoAPI.self) private var api
     @Environment(StreamingCenter.self) private var streaming
+    @Environment(ErrorPresenter.self) private var errors
 
     @State private var model: PagedListModel<Mastodon.Notification>?
     @State private var position = ScrollPosition()
+    /// The number of notifications, counted from the top, that the highlight
+    /// covers.
+    @State private var unreadCount = 0
 
     private static let handlerID = "NotificationsView"
 
@@ -26,43 +30,78 @@ struct NotificationsView: View {
             }
         }
         .tabToolbar("Notifications")
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("Clear Notifications", systemImage: "checkmark.circle") {
+                    clearAll()
+                }
+                .disabled(model?.isEmpty ?? true)
+            }
+        }
         .task {
             if model == nil {
                 let api = api
                 model = PagedListModel { olderThan in
                     try await api.notifications(olderThan: olderThan)
                 }
+                unreadCount = (try? await api.unreadNotificationCount().count) ?? 0
             }
 
             // The `user` channel carries the notifications too, thus this screen
             // needs no socket of its own.
             guard let model, api.supportsStreaming else { return }
-            streaming.addHandler(Self.handlerID, onReconnect: { await model.refresh() }) { event in
+            streaming.addHandler(
+                Self.handlerID,
+                onReconnect: {
+                    await model.refresh()
+                    unreadCount = (try? await api.unreadNotificationCount().count) ?? 0
+                }
+            ) { event in
                 guard case .notification(let notification) = event else { return }
                 await model.receive(notification)
+                unreadCount += 1
             }
         }
     }
 
     private func list(_ model: PagedListModel<Mastodon.Notification>) -> some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0) {
-                ForEach(model.items) { notification in
-                    NotificationRow(notification: notification)
-                        .padding(.horizontal)
-                    Divider()
-                }
+        List {
+            ForEach(Array(model.items.enumerated()), id: \.element.id) { index, notification in
+                NotificationRow(notification: notification, isUnread: index < unreadCount)
+                    .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                        if index < unreadCount {
+                            Button {
+                                markAsRead(notification, at: index)
+                            } label: {
+                                Label("Mark as Read", systemImage: "checkmark.circle")
+                            }
+                            .tint(.blue)
+                        }
+                    }
+                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                        Button(role: .destructive) {
+                            delete(notification, at: index)
+                        } label: {
+                            Label("Delete", systemImage: "trash")
+                        }
+                    }
+                    .listRowInsets(.init())
+            }
 
-                if model.phase == .loaded && model.hasMore {
-                    ProgressView()
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 24)
-                        .onAppear { model.loadMore() }
-                }
+            if model.phase == .loaded && model.hasMore {
+                ProgressView()
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 24)
+                    .onAppear { model.loadMore() }
+                    .listRowSeparator(.hidden)
             }
         }
+        .listStyle(.plain)
         .scrollPosition($position)
-        .refreshable { await model.refresh() }
+        .refreshable {
+            await model.refresh()
+            await markAllAsRead(model)
+        }
         .task { model.loadIfNeeded() }
         .newItemsPill(
             count: model.pendingCount,
@@ -95,6 +134,61 @@ struct NotificationsView: View {
             }
         }
     }
+
+    /// Moves the read marker to `notification`. Everything from it and
+    /// further back becomes read; anything newer stays unread.
+    private func markAsRead(_ notification: Mastodon.Notification, at index: Int) {
+        let api = api
+        Task {
+            do {
+                try await api.markNotificationsAsRead(upTo: notification.id)
+                unreadCount = min(unreadCount, index)
+            } catch {
+                errors.present(error, title: "Couldn't Mark as Read")
+            }
+        }
+    }
+
+    private func delete(_ notification: Mastodon.Notification, at index: Int) {
+        let api = api
+        guard let model else { return }
+        Task {
+            do {
+                try await api.dismissNotification(id: notification.id)
+                model.remove(id: notification.id)
+                if index < unreadCount { unreadCount -= 1 }
+            } catch {
+                errors.present(error, title: "Couldn't Delete Notification")
+            }
+        }
+    }
+
+    private func clearAll() {
+        let api = api
+        guard let model else { return }
+        Task {
+            do {
+                try await api.clearNotifications()
+                model.removeAll()
+                unreadCount = 0
+            } catch {
+                errors.present(error, title: "Couldn't Clear Notifications")
+            }
+        }
+    }
+
+    /// Moves the read marker past the newest notification on the screen.
+    /// A refresh calls this, because the reader has just looked at every
+    /// notification that arrived.
+    private func markAllAsRead(_ model: PagedListModel<Mastodon.Notification>) async {
+        guard let newest = model.items.first else { return }
+        do {
+            try await api.markNotificationsAsRead(upTo: newest.id)
+            unreadCount = 0
+        } catch {
+            errors.present(error, title: "Couldn't Mark Notifications as Read")
+        }
+    }
 }
 
 /// One notification. It shows the account, the action and the related post.
@@ -105,6 +199,7 @@ struct NotificationsView: View {
 /// request.
 struct NotificationRow: View {
     let notification: Mastodon.Notification
+    var isUnread: Bool = false
 
     @Environment(Navigator.self) private var navigator
 
@@ -127,6 +222,12 @@ struct NotificationRow: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
+                    if isUnread {
+                        Circle()
+                            .fill(.tint)
+                            .frame(width: 8, height: 8)
+                            .accessibilityLabel("Unread")
+                    }
                 }
             }
             
@@ -137,6 +238,13 @@ struct NotificationRow: View {
         }
         .buttonStyle(.plain)
         .padding(.vertical, 6)
+        .padding(.horizontal, 8)
+        .background {
+            if isUnread {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(.tint.opacity(0.08))
+            }
+        }
     }
 }
 

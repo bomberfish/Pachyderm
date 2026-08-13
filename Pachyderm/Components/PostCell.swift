@@ -125,24 +125,25 @@ struct PostCell: View {
             .buttonStyle(.plain)
 
             Spacer(minLength: 4)
-
-            VStack(alignment: .trailing, spacing: 2) {
-                if let createdAt = post.createdAt {
-                    Text(createdAt, format: .relative(presentation: .numeric, unitsStyle: .narrow))
-                }
-                HStack(spacing: 3) {
-                    if post.localOnly == true {
-                        Image(systemName: "house.slash")
-                            .accessibilityLabel("Local only")
+            if showsActions {
+                VStack(alignment: .trailing, spacing: 2) {
+                    if let createdAt = post.createdAt {
+                        Text(createdAt, format: .relative(presentation: .numeric, unitsStyle: .narrow))
                     }
-                    if let visibility = post.visibility, visibility != .public {
-                        Image(systemName: visibility.icon)
-                            .accessibilityLabel(visibility.description)
+                    HStack(spacing: 3) {
+                        if post.localOnly == true {
+                            Image(systemName: "house.slash")
+                                .accessibilityLabel("Local only")
+                        }
+                        if let visibility = post.visibility, visibility != .public {
+                            Image(systemName: visibility.icon)
+                                .accessibilityLabel(visibility.description)
+                        }
                     }
                 }
+                .font(.caption)
+                .foregroundStyle(.secondary)
             }
-            .font(.caption)
-            .foregroundStyle(.secondary)
         }
     }
 

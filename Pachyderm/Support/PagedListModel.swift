@@ -164,6 +164,13 @@ final class PagedListModel<Item: Identifiable & Sendable & RichContentSource> wh
         seenIDs.remove(id)
     }
 
+    /// Empties the screen. A "clear all" command calls it.
+    func removeAll() {
+        items = []
+        pending = []
+        seenIDs = []
+    }
+
     /// Exchanges one item in place. An edit of a post calls it.
     ///
     /// The function does nothing when the item is on neither list. An edit of an
